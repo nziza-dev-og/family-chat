@@ -42,11 +42,9 @@ export default function StatusPage() {
       const fetchAllStatuses = async () => {
         setIsLoadingStatus(true);
         try {
-          // For simplicity, assume "friends" are users you have chats with or a defined friend list.
-          // This might need refinement based on your app's friendship model.
           const friendsList = await getFriends(user.uid); 
           const friendUIDs = friendsList.map(f => f.uid);
-          const allUIDs = Array.from(new Set([user.uid, ...friendUIDs])); // Ensure unique UIDs
+          const allUIDs = Array.from(new Set([user.uid, ...friendUIDs])); 
           
           const fetchedStatusGroups = await getStatusesForUserList(allUIDs);
           
@@ -58,13 +56,12 @@ export default function StatusPage() {
 
         } catch (error: any) {
           console.error("Failed to fetch statuses:", error);
-          // Check if error is due to missing index and guide user.
           if (error.code === 'failed-precondition' && error.message.includes('index')) {
              toast({ 
               title: "Firestore Index Required", 
-              description: "A Firestore index is needed for status queries. Please create it in your Firebase console. The exact index details should be in your browser's console log.", 
+              description: "A Firestore index is needed for status queries. Please create it in your Firebase console. The exact index details should be in your browser's console log or the error message.", 
               variant: "destructive",
-              duration: 10000 // Show longer
+              duration: 10000 
             });
           } else {
             toast({ title: "Error", description: "Could not load statuses.", variant: "destructive" });
@@ -79,7 +76,6 @@ export default function StatusPage() {
 
   const refreshStatuses = async () => {
     if(!user) return;
-    // setIsLoadingStatus(true); // Optional: show loader during refresh
     try {
         const friendsList = await getFriends(user.uid);
         const friendUIDs = friendsList.map(f => f.uid);
@@ -90,8 +86,6 @@ export default function StatusPage() {
     } catch (error: any) {
         console.error("Failed to refresh statuses:", error);
         toast({ title: "Error", description: "Could not refresh statuses.", variant: "destructive" });
-    } finally {
-        // setIsLoadingStatus(false);
     }
   }
 
@@ -138,7 +132,6 @@ export default function StatusPage() {
   const openStatusViewer = (group: UserStatusGroup) => {
     setViewingStatus(group);
     setCurrentStatusIndex(0);
-    // TODO: Mark statuses as viewed here or on advancing
   };
 
   const closeStatusViewer = () => {
@@ -160,7 +153,6 @@ export default function StatusPage() {
   };
 
   const myCurrentStatusGroup = myStatusGroups.length > 0 ? myStatusGroups[0] : null;
-  // Placeholder for viewed logic: assume recent means unviewed for styling
   const recentUpdates = friendsStatusGroups.filter(group => group.statuses.length > 0);
 
 
@@ -194,7 +186,6 @@ export default function StatusPage() {
                   <AvatarFallback>{user.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                 </Avatar>
                 {(!myCurrentStatusGroup || myCurrentStatusGroup.statuses.length === 0) && (
-                  <DialogTrigger asChild>
                      <button 
                         onClick={(e) => { e.stopPropagation(); setIsImageStatusModalOpen(true);}} 
                         className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center border-2 border-background cursor-pointer hover:bg-primary/80"
@@ -202,7 +193,6 @@ export default function StatusPage() {
                       >
                         <Plus className="h-3 w-3" />
                      </button>
-                  </DialogTrigger>
                 )}
               </div>
               <div className="flex-1">
@@ -237,7 +227,6 @@ export default function StatusPage() {
               ))}
             </div>
           )}
-          {/* Viewed Updates - can be implemented later */}
         </ScrollArea>
       )}
       
@@ -306,17 +295,15 @@ export default function StatusPage() {
       {/* Status Viewer Modal */}
       {viewingStatus && viewingStatus.statuses.length > 0 && (
         <div 
-            className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-0" // p-0 for full screen feel
-            onClick={(e) => { e.stopPropagation(); nextStatus();}} // Click anywhere on backdrop to go to next or close
+            className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-0"
+            onClick={(e) => { e.stopPropagation(); nextStatus();}}
         >
-            {/* Progress bars for multiple statuses */}
             {viewingStatus.statuses.length > 1 && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[95%] max-w-xl flex space-x-1 z-[52] px-2">
                 {viewingStatus.statuses.map((_, idx) => (
                   <div key={idx} className="h-1 flex-1 bg-white/40 rounded-full overflow-hidden">
                     <div 
                       className={`h-full rounded-full ${idx <= currentStatusIndex ? 'bg-white' : ''}`}
-                      // TODO: Implement timed progress for automatic advance
                       style={{ width: idx === currentStatusIndex ? '100%' : (idx < currentStatusIndex ? '100%' : '0%') }} 
                     />
                   </div>
@@ -347,12 +334,12 @@ export default function StatusPage() {
                             src={viewingStatus.statuses[currentStatusIndex].content} 
                             alt="Status image" 
                             layout="intrinsic" 
-                            width={1080} // Max typical screen width
-                            height={1920} // Max typical screen height
+                            width={1080}
+                            height={1920}
                             objectFit="contain"
-                            className="max-h-[calc(100vh-100px)] max-w-full rounded-none md:rounded-lg" // Adjust max height for caption space
+                            className="max-h-[calc(100vh-100px)] max-w-full rounded-none md:rounded-lg"
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
-                            priority // Load current status image with priority
+                            priority
                         />
                         {viewingStatus.statuses[currentStatusIndex].caption && (
                             <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
@@ -360,7 +347,7 @@ export default function StatusPage() {
                             </p>
                         )}
                     </div>
-                ) : ( // Text Status
+                ) : ( 
                     <div className="bg-primary p-8 rounded-lg text-center max-w-md flex items-center justify-center aspect-square">
                         <p className="text-3xl text-primary-foreground whitespace-pre-wrap">
                             {viewingStatus.statuses[currentStatusIndex].content}
@@ -369,7 +356,6 @@ export default function StatusPage() {
                 )}
             </div>
 
-            {/* Navigation Areas */}
             {viewingStatus.statuses.length > 1 && (
                  <>
                     <div className="absolute left-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); prevStatus(); }}/>
@@ -382,3 +368,5 @@ export default function StatusPage() {
     </div>
   );
 }
+
+    
