@@ -228,7 +228,7 @@ export default function AudioCallPage() {
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await updateDoc(callDocRef, { 
-            answer: answer.toJSON(),
+            answer: pc.localDescription.toJSON(), // Corrected: Use pc.localDescription
             status: "answered",
             updatedAt: Timestamp.now()
         });
@@ -268,7 +268,7 @@ export default function AudioCallPage() {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await setDoc(callDocRef, { 
-            offer: offer.toJSON(),
+            offer: pc.localDescription.toJSON(), // Corrected: Use pc.localDescription
             callerId: user.uid,
             calleeId: chatPartner.uid,
             callType: 'audio',

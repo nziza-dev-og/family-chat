@@ -53,7 +53,6 @@ export default function VideoCallPage() {
   const callDocRef = doc(db, "calls", chatId);
   const iceCandidateCollectionRef = collection(callDocRef, "iceCandidates");
   
-  // To store ICE candidate listeners for cleanup
   const iceCandidateListenersUnsubscribeRef = useRef<(() => void) | null>(null);
   const callDocUnsubscribeRef = useRef<(() => void) | null>(null);
 
@@ -86,15 +85,11 @@ export default function VideoCallPage() {
         try {
             const callSnap = await getDoc(callDocRef);
             if (callSnap.exists()) {
-                // Only update/delete if this user is part of the call to avoid conflicts
                 const callData = callSnap.data();
                 if (callData.callerId === user?.uid || callData.calleeId === user?.uid) {
-                    // Update status to 'ended' or delete the document.
-                    // For simplicity, let's update to ended. A more robust system might delete it or archive.
                     await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
                     console.log("Call document status updated to 'ended'.");
 
-                    // Delete ICE candidates subcollection
                     const iceCandidatesSnap = await getDocs(iceCandidateCollectionRef);
                     const batch = writeBatch(db);
                     iceCandidatesSnap.forEach(doc => batch.delete(doc.ref));
@@ -135,7 +130,7 @@ export default function VideoCallPage() {
             } else { setChatPartner({ uid: "unknown", name: "Chat User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"}); }
           } else { 
             toast({ title: "Error", description: "Could not determine chat partner.", variant: "destructive" });
-            router.replace("/chats"); // Should not happen in 1-on-1
+            router.replace("/chats"); 
           }
         } else {
           toast({ title: "Error", description: "Chat not found.", variant: "destructive" });
@@ -154,7 +149,6 @@ export default function VideoCallPage() {
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) return;
 
-    // If this call was presented via IncomingCallDialog, clear it now that we're on the page.
     if (incomingCall && incomingCall.chatId === chatId) {
       clearIncomingCall();
     }
@@ -216,7 +210,7 @@ export default function VideoCallPage() {
     initialize();
 
     return () => {
-      cleanupCall(true); // Pass true to update Firestore status on unmount
+      cleanupCall(true); 
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading, isLoadingPartner, chatPartner, clearIncomingCall]);
@@ -232,35 +226,32 @@ export default function VideoCallPage() {
 
       if (data.status === 'declined' || data.status === 'ended') {
         toast({ title: "Call Ended", description: `The call was ${data.status}.` });
-        await cleanupCall(false); // Don't update Firestore again if already ended/declined
+        await cleanupCall(false); 
         router.back();
         return;
       }
 
-      // Callee: Offer exists, I haven't answered yet (no remoteDescription), and I'm the callee
       if (data.offer && data.calleeId === user.uid && !pc.currentRemoteDescription && data.status === 'ringing') {
         setCallStatus("Offer received, creating answer...");
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await updateDoc(callDocRef, { 
-            answer: answer.toJSON(),
-            status: "answered", // Or 'active' if we assume connection proceeds
+            answer: pc.localDescription.toJSON(), // Corrected: Use pc.localDescription
+            status: "answered", 
             updatedAt: Timestamp.now()
         });
         setCallStatus("Answer sent, connecting...");
       }
 
-      // Caller: Answer exists, I haven't processed it yet, and I'm the caller
       if (data.answer && data.callerId === user.uid && pc.signalingState === "have-local-offer") {
-         if (!pc.currentRemoteDescription) { // Check to prevent setting multiple times
+         if (!pc.currentRemoteDescription) { 
             setCallStatus("Answer received, connecting...");
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
          }
       }
     });
 
-    // Listen for ICE candidates from the other user
     const qIceCandidates = query(
       iceCandidateCollectionRef,
       where("recipientId", "==", user.uid)
@@ -279,17 +270,14 @@ export default function VideoCallPage() {
       });
     });
 
-    // Caller: If call document doesn't exist or doesn't have an offer for the partner, create one
     const callSnap = await getDoc(callDocRef);
     if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid )) {
-    // If I am not the caller and not the callee in an existing "ringing" or "answered" call, I initiate.
-    // This simplified logic assumes if I land here and there's no active call for me, I am initiating.
       if (!callSnap.exists() || (callSnap.data()?.status !== 'ringing' && callSnap.data()?.status !== 'answered')) {
         setCallStatus("Creating offer...");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await setDoc(callDocRef, { 
-            offer: offer.toJSON(),
+            offer: pc.localDescription.toJSON(), // Corrected: Use pc.localDescription
             callerId: user.uid,
             calleeId: chatPartner.uid,
             callType: 'video',
@@ -300,7 +288,7 @@ export default function VideoCallPage() {
         setCallStatus("Calling partner, waiting for answer...");
       }
     } else if (callSnap.exists() && callSnap.data()?.callerId === user.uid && !callSnap.data()?.answer && callSnap.data()?.status === 'ringing') {
-        setCallStatus("Calling partner, waiting for answer..."); // Already initiated, just waiting
+        setCallStatus("Calling partner, waiting for answer..."); 
     }
   }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall]);
 
