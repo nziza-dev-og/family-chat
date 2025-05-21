@@ -1,7 +1,9 @@
+
 import type {Metadata} from 'next';
 import {Geist, Geist_Mono} from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/providers/AuthProvider';
+import { IncomingCallProvider } from "@/contexts/IncomingCallContext"; // Import IncomingCallProvider
 import { Toaster } from "@/components/ui/toaster";
 
 const geistSans = Geist({
@@ -28,8 +30,10 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <AuthProvider>
-          {children}
-          <Toaster />
+          <IncomingCallProvider> {/* Wrap with IncomingCallProvider */}
+            {children}
+            <Toaster />
+          </IncomingCallProvider>
         </AuthProvider>
       </body>
     </html>

@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mic, MicOff, PhoneOff, Loader2, ShieldAlert } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where, Timestamp } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
+import { useIncomingCall } from "@/contexts/IncomingCallContext";
 
 interface ChatPartner {
   uid: string;
@@ -31,6 +32,7 @@ export default function AudioCallPage() {
   const router = useRouter();
   const { toast } = useToast();
   const { user, loading: authLoading } = useAuth();
+  const { clearIncomingCall, incomingCall } = useIncomingCall();
   const chatId = params.chatId as string;
 
   const [chatPartner, setChatPartner] = useState<ChatPartner | null>(null);
@@ -45,13 +47,16 @@ export default function AudioCallPage() {
 
   const [hasPermission, setHasPermission] = useState(true); 
   const [isMicMuted, setIsMicMuted] = useState(false);
-  const [callStatus, setCallStatus] = useState("Initializing..."); // "Initializing...", "Connecting...", "Connected", "Failed"
+  const [callStatus, setCallStatus] = useState("Initializing...");
 
-  const callDocRef = useRef(doc(db, "calls", chatId)); // Document for signaling this specific call
-  const iceCandidateCollectionRef = useRef(collection(callDocRef.current, "iceCandidates"));
+  const callDocRef = doc(db, "calls", chatId);
+  const iceCandidateCollectionRef = collection(callDocRef, "iceCandidates");
+  
+  const iceCandidateListenersUnsubscribeRef = useRef<(() => void) | null>(null);
+  const callDocUnsubscribeRef = useRef<(() => void) | null>(null);
 
-
-  const cleanupCall = useCallback(async () => {
+  const cleanupCall = useCallback(async (updateFirestoreStatus = true) => {
+    console.log("Cleaning up audio call for chatId:", chatId);
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
@@ -61,19 +66,36 @@ export default function AudioCallPage() {
       peerConnectionRef.current = null;
     }
     
-    try {
-      const iceCandidatesSnap = await getDocs(iceCandidateCollectionRef.current);
-      const batch = writeBatch(db);
-      iceCandidatesSnap.forEach(doc => batch.delete(doc.ref));
-      await batch.commit();
-      await deleteDoc(callDocRef.current);
-    } catch (error) {
-      console.warn("Error during call cleanup:", error);
+    if (iceCandidateListenersUnsubscribeRef.current) {
+        iceCandidateListenersUnsubscribeRef.current();
+        iceCandidateListenersUnsubscribeRef.current = null;
+    }
+    if (callDocUnsubscribeRef.current) {
+        callDocUnsubscribeRef.current();
+        callDocUnsubscribeRef.current = null;
+    }
+
+    if (updateFirestoreStatus) {
+        try {
+            const callSnap = await getDoc(callDocRef);
+            if (callSnap.exists()) {
+                const callData = callSnap.data();
+                if (callData.callerId === user?.uid || callData.calleeId === user?.uid) {
+                    await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
+                    const iceCandidatesSnap = await getDocs(iceCandidateCollectionRef);
+                    const batch = writeBatch(db);
+                    iceCandidatesSnap.forEach(doc => batch.delete(doc.ref));
+                    await batch.commit();
+                }
+            }
+        } catch (error) {
+            console.warn("Error during call document cleanup:", error);
+        }
     }
     setCallStatus("Call Ended");
-  }, [chatId]);
+  }, [chatId, callDocRef, iceCandidateCollectionRef, user?.uid]);
 
-  // Fetch chat partner details
+
   useEffect(() => {
     if (!chatId || !user) {
         setIsLoadingPartner(false);
@@ -97,9 +119,10 @@ export default function AudioCallPage() {
                 dataAiHint: "person portrait",
               });
             } else { setChatPartner({ uid: "unknown", name: "Chat User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"}); }
-          } else if (chatData.isGroup) {
-             setChatPartner({ uid: chatId, name: chatData.groupName || "Call Partner", avatar: chatData.groupAvatar || "https://placehold.co/100x100.png", dataAiHint: "group people"});
-          } else { setChatPartner({ uid: "unknown", name: "Call Partner", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"}); }
+          } else {
+             toast({ title: "Error", description: "Could not determine chat partner.", variant: "destructive" });
+             router.replace("/chats");
+          }
         } else {
           toast({ title: "Error", description: "Chat not found.", variant: "destructive" });
           router.replace("/chats");
@@ -114,16 +137,19 @@ export default function AudioCallPage() {
     fetchChatPartnerDetails();
   }, [chatId, user, router, toast]);
 
-  // Initialize PeerConnection and Media
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) return;
+
+    if (incomingCall && incomingCall.chatId === chatId) {
+      clearIncomingCall();
+    }
 
     const initialize = async () => {
       setCallStatus("Requesting permissions...");
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         localStreamRef.current = stream;
-        if (localAudioRef.current) { // For local feedback if needed, though typically not rendered
+        if (localAudioRef.current) {
           localAudioRef.current.srcObject = stream; 
         }
         setHasPermission(true);
@@ -145,19 +171,20 @@ export default function AudioCallPage() {
           });
           if (remoteAudioRef.current) remoteAudioRef.current.play().catch(e => console.error("Error playing remote audio:", e));
           setCallStatus("Connected");
+          updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
         };
 
         peerConnectionRef.current.onicecandidate = event => {
           if (event.candidate) {
-            addDoc(iceCandidateCollectionRef.current, {
-              ...event.candidate.toJSON(),
+            addDoc(iceCandidateCollectionRef, {
+              candidate: event.candidate.toJSON(),
               senderId: user.uid,
               recipientId: chatPartner.uid,
             });
           }
         };
         
-        setupSignaling();
+        await setupSignaling();
 
       } catch (error) {
         console.error("Error accessing microphone:", error);
@@ -174,47 +201,58 @@ export default function AudioCallPage() {
 
     initialize();
     return () => {
-      cleanupCall();
+      cleanupCall(true);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, isLoadingPartner, chatPartner]);
+  }, [user, authLoading, isLoadingPartner, chatPartner, clearIncomingCall]);
 
-  // Signaling logic (similar to video, adapted for audio context)
-  const setupSignaling = useCallback(() => {
+
+  const setupSignaling = useCallback(async () => {
     if (!user || !peerConnectionRef.current || !chatPartner) return;
     const pc = peerConnectionRef.current;
 
-    const unsubscribeCallDoc = onSnapshot(callDocRef.current, async (snapshot) => {
+    callDocUnsubscribeRef.current = onSnapshot(callDocRef, async (snapshot) => {
       const data = snapshot.data();
       if (!data) return;
 
-      if (data.offer && data.offer.recipientId === user.uid && !pc.currentRemoteDescription) {
+      if (data.status === 'declined' || data.status === 'ended') {
+        toast({ title: "Call Ended", description: `The call was ${data.status}.` });
+        await cleanupCall(false);
+        router.back();
+        return;
+      }
+
+      if (data.offer && data.calleeId === user.uid && !pc.currentRemoteDescription && data.status === 'ringing') {
         setCallStatus("Offer received, creating answer...");
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        await updateDoc(callDocRef.current, { 
-            answer: { ...answer.toJSON(), senderId: user.uid, recipientId: data.offer.senderId } 
+        await updateDoc(callDocRef, { 
+            answer: answer.toJSON(),
+            status: "answered",
+            updatedAt: Timestamp.now()
         });
         setCallStatus("Answer sent, connecting...");
       }
 
-      if (data.answer && data.answer.recipientId === user.uid && !pc.currentRemoteDescription && pc.signalingState === "have-local-offer") {
-        setCallStatus("Answer received, connecting...");
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      if (data.answer && data.callerId === user.uid && pc.signalingState === "have-local-offer") {
+        if (!pc.currentRemoteDescription) {
+            setCallStatus("Answer received, connecting...");
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        }
       }
     });
 
     const qIceCandidates = query(
-      iceCandidateCollectionRef.current,
+      iceCandidateCollectionRef,
       where("recipientId", "==", user.uid)
     );
-    const unsubscribeIceCandidates = onSnapshot(qIceCandidates, (snapshot) => {
+    iceCandidateListenersUnsubscribeRef.current = onSnapshot(qIceCandidates, (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
         if (change.type === "added") {
-           if (pc.signalingState !== "closed") {
+           if (pc.signalingState !== "closed" && change.doc.data().candidate) {
              try {
-                await pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                await pc.addIceCandidate(new RTCIceCandidate(change.doc.data().candidate));
              } catch (e) {
                 console.error("Error adding received ICE candidate", e);
              }
@@ -223,26 +261,27 @@ export default function AudioCallPage() {
       });
     });
 
-    getDoc(callDocRef.current).then(async (docSnap) => {
-      if (!docSnap.exists() || !docSnap.data()?.offer) {
+    const callSnap = await getDoc(callDocRef);
+    if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid)) {
+      if (!callSnap.exists() || (callSnap.data()?.status !== 'ringing' && callSnap.data()?.status !== 'answered')) {
         setCallStatus("Creating offer...");
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await setDoc(callDocRef.current, { 
-            offer: { ...offer.toJSON(), senderId: user.uid, recipientId: chatPartner.uid },
-            participants: [user.uid, chatPartner.uid],
-            createdAt: new Date().toISOString(),
-            type: 'audio', // Indicate call type
+        await setDoc(callDocRef, { 
+            offer: offer.toJSON(),
+            callerId: user.uid,
+            calleeId: chatPartner.uid,
+            callType: 'audio',
+            status: 'ringing',
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
         });
-        setCallStatus("Offer sent, waiting for answer...");
+        setCallStatus("Calling partner, waiting for answer...");
       }
-    });
-
-    return () => {
-      unsubscribeCallDoc();
-      unsubscribeIceCandidates();
-    };
-  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef]);
+    } else if (callSnap.exists() && callSnap.data()?.callerId === user.uid && !callSnap.data()?.answer && callSnap.data()?.status === 'ringing') {
+        setCallStatus("Calling partner, waiting for answer...");
+    }
+  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall]);
 
   const toggleMic = () => {
     if (localStreamRef.current) {
@@ -255,7 +294,7 @@ export default function AudioCallPage() {
   };
 
   const handleEndCall = async () => {
-    await cleanupCall();
+    await cleanupCall(true);
     toast({ title: "Call Ended" });
     router.back();
   };
@@ -272,7 +311,7 @@ export default function AudioCallPage() {
   return (
     <div className="flex flex-col h-screen bg-gray-800 text-white">
       <header className="flex items-center p-3 border-b border-gray-700 bg-gray-700 sticky top-0 z-10">
-        <Button variant="ghost" size="icon" className="mr-2 text-white hover:bg-gray-600" onClick={() => router.back()}>
+        <Button variant="ghost" size="icon" className="mr-2 text-white hover:bg-gray-600" onClick={handleEndCall}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1 text-center">
@@ -320,5 +359,3 @@ export default function AudioCallPage() {
     </div>
   );
 }
-
-    
