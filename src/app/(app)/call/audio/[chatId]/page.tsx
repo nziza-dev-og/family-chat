@@ -1,18 +1,16 @@
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mic, MicOff, PhoneOff, Loader2, ShieldAlert } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
-
 
 interface ChatPartner {
   uid: string;
@@ -20,6 +18,13 @@ interface ChatPartner {
   avatar: string;
   dataAiHint: string;
 }
+
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ],
+};
 
 export default function AudioCallPage() {
   const params = useParams();
@@ -32,13 +37,43 @@ export default function AudioCallPage() {
   const [isLoadingPartner, setIsLoadingPartner] = useState(true);
   
   const localAudioRef = useRef<HTMLAudioElement>(null); 
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
 
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+
   const [hasPermission, setHasPermission] = useState(true); 
   const [isMicMuted, setIsMicMuted] = useState(false);
-  const [callStatus, setCallStatus] = useState("Connecting...");
+  const [callStatus, setCallStatus] = useState("Initializing..."); // "Initializing...", "Connecting...", "Connected", "Failed"
+
+  const callDocRef = useRef(doc(db, "calls", chatId)); // Document for signaling this specific call
+  const iceCandidateCollectionRef = useRef(collection(callDocRef.current, "iceCandidates"));
 
 
+  const cleanupCall = useCallback(async () => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    
+    try {
+      const iceCandidatesSnap = await getDocs(iceCandidateCollectionRef.current);
+      const batch = writeBatch(db);
+      iceCandidatesSnap.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+      await deleteDoc(callDocRef.current);
+    } catch (error) {
+      console.warn("Error during call cleanup:", error);
+    }
+    setCallStatus("Call Ended");
+  }, [chatId]);
+
+  // Fetch chat partner details
   useEffect(() => {
     if (!chatId || !user) {
         setIsLoadingPartner(false);
@@ -47,16 +82,12 @@ export default function AudioCallPage() {
     setIsLoadingPartner(true);
     const fetchChatPartnerDetails = async () => {
       try {
-        const chatDocRef = doc(db, "chats", chatId);
-        const chatDocSnap = await getDoc(chatDocRef);
-
+        const chatDocSnap = await getDoc(doc(db, "chats", chatId));
         if (chatDocSnap.exists()) {
           const chatData = chatDocSnap.data();
           const partnerId = chatData.participants.find((pId: string) => pId !== user.uid); 
-
           if (partnerId) {
-            const userDocRef = doc(db, "users", partnerId);
-            const userDocSnap = await getDoc(userDocRef);
+            const userDocSnap = await getDoc(doc(db, "users", partnerId));
             if (userDocSnap.exists()) {
               const partnerData = userDocSnap.data();
               setChatPartner({
@@ -65,15 +96,10 @@ export default function AudioCallPage() {
                 avatar: partnerData.photoURL || "https://placehold.co/100x100.png",
                 dataAiHint: "person portrait",
               });
-            } else {
-               setChatPartner({ uid: "unknown", name: "Chat User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"});
-            }
+            } else { setChatPartner({ uid: "unknown", name: "Chat User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"}); }
           } else if (chatData.isGroup) {
              setChatPartner({ uid: chatId, name: chatData.groupName || "Call Partner", avatar: chatData.groupAvatar || "https://placehold.co/100x100.png", dataAiHint: "group people"});
-          } else {
-             // Fallback if partner logic fails for some reason (e.g. chat with self, though UI should prevent this)
-             setChatPartner({ uid: "unknown", name: "Call Partner", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"});
-          }
+          } else { setChatPartner({ uid: "unknown", name: "Call Partner", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"}); }
         } else {
           toast({ title: "Error", description: "Chat not found.", variant: "destructive" });
           router.replace("/chats");
@@ -86,19 +112,53 @@ export default function AudioCallPage() {
       }
     };
     fetchChatPartnerDetails();
-  }, [chatId, router, toast, user]);
+  }, [chatId, user, router, toast]);
 
-
+  // Initialize PeerConnection and Media
   useEffect(() => {
-    const getMediaPermissions = async () => {
+    if (authLoading || isLoadingPartner || !user || !chatPartner) return;
+
+    const initialize = async () => {
+      setCallStatus("Requesting permissions...");
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        setLocalStream(stream);
-        if (localAudioRef.current) {
+        localStreamRef.current = stream;
+        if (localAudioRef.current) { // For local feedback if needed, though typically not rendered
           localAudioRef.current.srcObject = stream; 
         }
         setHasPermission(true);
-        setCallStatus(chatPartner ? `Ringing ${chatPartner.name}...` : "Ringing...");
+        setCallStatus("Initializing connection...");
+
+        peerConnectionRef.current = new RTCPeerConnection(ICE_SERVERS);
+
+        localStreamRef.current.getTracks().forEach(track => {
+          peerConnectionRef.current!.addTrack(track, localStreamRef.current!);
+        });
+
+        remoteStreamRef.current = new MediaStream();
+        if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = remoteStreamRef.current;
+        }
+        peerConnectionRef.current.ontrack = event => {
+          event.streams[0].getTracks().forEach(track => {
+            remoteStreamRef.current!.addTrack(track);
+          });
+          if (remoteAudioRef.current) remoteAudioRef.current.play().catch(e => console.error("Error playing remote audio:", e));
+          setCallStatus("Connected");
+        };
+
+        peerConnectionRef.current.onicecandidate = event => {
+          if (event.candidate) {
+            addDoc(iceCandidateCollectionRef.current, {
+              ...event.candidate.toJSON(),
+              senderId: user.uid,
+              recipientId: chatPartner.uid,
+            });
+          }
+        };
+        
+        setupSignaling();
+
       } catch (error) {
         console.error("Error accessing microphone:", error);
         setHasPermission(false);
@@ -112,22 +172,81 @@ export default function AudioCallPage() {
       }
     };
 
-    if (chatPartner && !isLoadingPartner) { 
-        getMediaPermissions();
-    }
-    
-
+    initialize();
     return () => {
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
+      cleanupCall();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatPartner, isLoadingPartner]); 
+  }, [user, authLoading, isLoadingPartner, chatPartner]);
+
+  // Signaling logic (similar to video, adapted for audio context)
+  const setupSignaling = useCallback(() => {
+    if (!user || !peerConnectionRef.current || !chatPartner) return;
+    const pc = peerConnectionRef.current;
+
+    const unsubscribeCallDoc = onSnapshot(callDocRef.current, async (snapshot) => {
+      const data = snapshot.data();
+      if (!data) return;
+
+      if (data.offer && data.offer.recipientId === user.uid && !pc.currentRemoteDescription) {
+        setCallStatus("Offer received, creating answer...");
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await updateDoc(callDocRef.current, { 
+            answer: { ...answer.toJSON(), senderId: user.uid, recipientId: data.offer.senderId } 
+        });
+        setCallStatus("Answer sent, connecting...");
+      }
+
+      if (data.answer && data.answer.recipientId === user.uid && !pc.currentRemoteDescription && pc.signalingState === "have-local-offer") {
+        setCallStatus("Answer received, connecting...");
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      }
+    });
+
+    const qIceCandidates = query(
+      iceCandidateCollectionRef.current,
+      where("recipientId", "==", user.uid)
+    );
+    const unsubscribeIceCandidates = onSnapshot(qIceCandidates, (snapshot) => {
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type === "added") {
+           if (pc.signalingState !== "closed") {
+             try {
+                await pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+             } catch (e) {
+                console.error("Error adding received ICE candidate", e);
+             }
+           }
+        }
+      });
+    });
+
+    getDoc(callDocRef.current).then(async (docSnap) => {
+      if (!docSnap.exists() || !docSnap.data()?.offer) {
+        setCallStatus("Creating offer...");
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await setDoc(callDocRef.current, { 
+            offer: { ...offer.toJSON(), senderId: user.uid, recipientId: chatPartner.uid },
+            participants: [user.uid, chatPartner.uid],
+            createdAt: new Date().toISOString(),
+            type: 'audio', // Indicate call type
+        });
+        setCallStatus("Offer sent, waiting for answer...");
+      }
+    });
+
+    return () => {
+      unsubscribeCallDoc();
+      unsubscribeIceCandidates();
+    };
+  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef]);
 
   const toggleMic = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => {
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => {
         track.enabled = !track.enabled;
       });
       setIsMicMuted(prev => !prev);
@@ -135,10 +254,8 @@ export default function AudioCallPage() {
     }
   };
 
-  const handleEndCall = () => {
-     if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
-    }
+  const handleEndCall = async () => {
+    await cleanupCall();
     toast({ title: "Call Ended" });
     router.back();
   };
@@ -154,26 +271,24 @@ export default function AudioCallPage() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-800 text-white">
-      {/* Call Header */}
       <header className="flex items-center p-3 border-b border-gray-700 bg-gray-700 sticky top-0 z-10">
         <Button variant="ghost" size="icon" className="mr-2 text-white hover:bg-gray-600" onClick={() => router.back()}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1 text-center">
           <h2 className="font-semibold">{chatPartner.name}</h2>
-          <p className="text-xs text-green-400">{callStatus}</p>
+          <p className="text-xs text-green-400 capitalize">{callStatus.toLowerCase()}</p>
         </div>
-        <div className="w-10"></div>
+        <div className="w-10"></div> {/* Spacer */}
       </header>
 
-      {/* Main Call Area */}
       <div className="flex-1 flex flex-col items-center justify-center p-4 space-y-8">
-        {!hasPermission && (
+        {!hasPermission && callStatus === "Permission Denied" && (
            <Alert variant="destructive" className="w-auto max-w-md">
             <ShieldAlert className="h-5 w-5" />
             <AlertTitle>Permission Required</AlertTitle>
             <AlertDescription>
-              Microphone access is required for audio calls. Please enable it in your browser settings and refresh.
+              Microphone access is required. Please enable it in browser settings.
             </AlertDescription>
           </Alert>
         )}
@@ -184,13 +299,14 @@ export default function AudioCallPage() {
         </Avatar>
         
         <audio ref={localAudioRef} muted autoPlay playsInline className="hidden" />
-        {/* <audio ref={remoteAudioRef} autoPlay playsInline /> Remote audio placeholder */}
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
         <p className="text-lg">Audio call with {chatPartner.name}</p>
-        <p className="text-sm text-gray-400">Full call functionality (connecting to partner) is coming soon.</p>
+         {callStatus !== "Connected" && (
+           <p className="text-sm text-gray-400">{callStatus === "Initializing..." || callStatus === "Requesting permissions..." || callStatus === "Initializing connection..." ? "Setting up..." : "Attempting to connect..."}</p>
+        )}
       </div>
 
-      {/* Call Controls Footer */}
       <footer className="p-6 border-t border-gray-700 bg-gray-700 sticky bottom-0 z-10">
         <div className="flex items-center justify-center space-x-6">
           <Button variant="outline" size="lg" className="rounded-full p-4 bg-gray-600 border-gray-500 text-white hover:bg-gray-500" onClick={toggleMic} disabled={!hasPermission}>
@@ -200,8 +316,9 @@ export default function AudioCallPage() {
             <PhoneOff className="h-7 w-7" />
           </Button>
         </div>
-         <p className="text-center text-xs text-gray-400 mt-3">WebRTC P2P connection not yet implemented. This is a local media preview.</p>
       </footer>
     </div>
   );
 }
+
+    
