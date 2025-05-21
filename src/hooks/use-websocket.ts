@@ -3,87 +3,136 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-// Note: The original snippet had a mysterious mention of an error on line 16.
-// This hook implementation appears standard. If an error was occurring,
-// it might have been in a specific usage context not provided here.
+interface WebSocketHookOptions {
+  maxAttempts?: number;
+}
 
-const useWebSocketConnection = (url: string | null, options = {}) => {
-  const [socket, setSocket] = useState<WebSocket | null>(null);
+const useWebSocketConnection = (url: string | null, options: WebSocketHookOptions = {}) => {
+  const [socket, setSocket] = useState<WebSocket | null>(null); // Kept for returning the socket instance if needed by consuming component
+  const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
-  const maxReconnectAttempts = 5;
+  const maxReconnectAttempts = options.maxAttempts || 5;
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
-  const [lastMessage, setLastMessage] = useState<any>(null); // Or more specific type
+  const [lastMessage, setLastMessage] = useState<any>(null);
+
+  const sendMessage = useCallback((data: string | object): boolean => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      const message = typeof data === 'string' ? data : JSON.stringify(data);
+      socketRef.current.send(message);
+      return true;
+    } else {
+      console.error('WebSocket is not connected. Cannot send message.');
+      return false;
+    }
+  }, []); // socketRef is stable
 
   const connect = useCallback(() => {
     if (!url) {
         console.log("WebSocket URL is null, not connecting.");
+        setIsConnected(false);
         return;
     }
-    if (socket && socket.readyState === WebSocket.OPEN) {
+    
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
         console.log("WebSocket is already connected.");
+        setIsConnected(true); // Ensure state is correct
         return;
     }
 
     console.log(`Attempting to connect WebSocket to ${url}, attempt: ${reconnectAttempts + 1}`);
     try {
+      // Close any existing socket first to prevent multiple connections
+      if (socketRef.current) {
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onclose = null;
+        socketRef.current.onerror = null;
+        socketRef.current.close();
+      }
+      
       const ws = new WebSocket(url);
+      socketRef.current = ws; // Assign to ref immediately
 
       ws.onopen = () => {
         console.log('WebSocket connected successfully to:', url);
         setIsConnected(true);
         setReconnectAttempts(0); // Reset attempts on successful connection
+        setSocket(ws); // Update state
       };
 
       ws.onmessage = (event) => {
         // console.log('WebSocket message received:', event.data);
         try {
-            setLastMessage(JSON.parse(event.data as string));
+            const parsed = JSON.parse(event.data as string);
+            setLastMessage(parsed);
+            
+            // Example: Handle audio call related messages (can be customized by consumer)
+            if (parsed.type === 'call_status' && parsed.status === 'ended') {
+              console.log('Call ended by server message:', parsed);
+            }
         } catch (e) {
             setLastMessage(event.data);
         }
       };
 
       ws.onclose = (event) => {
-        console.log('WebSocket connection closed', event.code, event.reason);
+        console.log('WebSocket connection closed. Code:', event.code, 'Reason:', event.reason, 'URL:', url);
         setIsConnected(false);
-        // Don't attempt to reconnect if the close was clean (e.g., 1000) or if URL is null
+        setSocket(null); // Clear state
+        
+        if (socketRef.current === ws) { // Only act if this is the current socket closing
+            socketRef.current = null;
+        }
+
+        // Don't attempt to reconnect if the close was clean (1000) or if URL is null
+        // or if max attempts reached
         if (event.code !== 1000 && url && reconnectAttempts < maxReconnectAttempts) {
           const timeout = Math.min(1000 * (2 ** reconnectAttempts), 30000); // Exponential backoff
-          console.log(`WebSocket attempting to reconnect in ${timeout / 1000}s (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
+          console.log(`WebSocket attempting to reconnect to ${url} in ${timeout / 1000}s (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
+          
           reconnectTimeoutRef.current = setTimeout(() => {
             setReconnectAttempts(prev => prev + 1);
-            // connect(); // connect is now a dependency of useEffect, so this will be handled by effect re-run
+            // connect(); // connect will be called by useEffect reacting to reconnectAttempts change
           }, timeout);
         } else if (reconnectAttempts >= maxReconnectAttempts) {
-            console.log("WebSocket max reconnect attempts reached.");
+            console.log(`WebSocket max reconnect attempts reached for ${url}.`);
+        } else if (event.code === 1000) {
+            console.log(`WebSocket connection to ${url} closed cleanly.`);
         }
       };
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnected(false);
-        // ws.close(); // Ensure connection is closed on error to trigger onclose for reconnect
+      ws.onerror = (errorEvent) => {
+        // An onerror event is always followed by a close event.
+        console.error('WebSocket error on connection to:', url, errorEvent);
+        // setIsConnected(false); // onclose will handle this
+        // setSocket(null);
       };
-
-      setSocket(ws);
+      
     } catch (error) {
-      console.error('Error establishing WebSocket connection:', error);
+      console.error('Error establishing WebSocket connection to:', url, error);
       setIsConnected(false);
-      if (url && reconnectAttempts < maxReconnectAttempts) { // Also attempt reconnect on catch
+      setSocket(null);
+      // Also attempt reconnect on catch if applicable
+      if (url && reconnectAttempts < maxReconnectAttempts) {
         const timeout = Math.min(1000 * (2 ** reconnectAttempts), 30000);
         reconnectTimeoutRef.current = setTimeout(() => {
           setReconnectAttempts(prev => prev + 1);
+          // connect(); // connect will be called by useEffect
         }, timeout);
       }
     }
-  }, [url, reconnectAttempts, maxReconnectAttempts, socket]); // socket added as dependency
+  }, [url, reconnectAttempts, maxReconnectAttempts]); // Removed socket state from dependencies
 
+  // Main effect to connect and disconnect
   useEffect(() => {
-    if (url) { // Only connect if URL is provided
+    if (url) {
         connect();
     } else { // If URL becomes null, clean up existing socket
-        socket?.close(1000, "URL became null");
+        if (socketRef.current) {
+            socketRef.current.close(1000, "URL became null");
+            socketRef.current = null;
+        }
         setSocket(null);
         setIsConnected(false);
     }
@@ -92,34 +141,47 @@ const useWebSocketConnection = (url: string | null, options = {}) => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        console.log("Closing WebSocket connection on component unmount or URL change.");
-        socket.close(1000, "Component unmounting"); // 1000 is a normal closure
+      if (socketRef.current) {
+        console.log("Closing WebSocket connection on component unmount or URL change (cleanup). URL:", socketRef.current.url);
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onclose = null; // Prevent onclose logic from firing during intentional cleanup
+        socketRef.current.onerror = null;
+        socketRef.current.close(1000, "Component unmounting or URL changed");
+        socketRef.current = null;
       }
-      setSocket(null); // Clear socket state on cleanup
+      setSocket(null); // Clear state on cleanup
       setIsConnected(false);
     };
-  }, [url, connect]); // connect is now a dependency
+  }, [url, connect]); // `connect` is memoized and changes when url or reconnectAttempts change
 
   // Effect to re-trigger connection when reconnectAttempts changes
-  useEffect(() => {
-    if (url && reconnectAttempts > 0 && reconnectAttempts <= maxReconnectAttempts && (!socket || socket.readyState === WebSocket.CLOSED)) {
-        console.log(`Reconnection attempt ${reconnectAttempts} triggered by state change.`);
+   useEffect(() => {
+    if (url && reconnectAttempts > 0 && reconnectAttempts <= maxReconnectAttempts && (!socketRef.current || socketRef.current.readyState === WebSocket.CLOSED)) {
+        console.log(`Reconnection attempt ${reconnectAttempts} triggered by state change for ${url}.`);
         connect();
     }
-  }, [reconnectAttempts, url, connect, socket, maxReconnectAttempts]);
+  }, [reconnectAttempts, url, connect, maxReconnectAttempts]);
 
 
-  const sendMessage = useCallback((data: string | object) => {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      const message = typeof data === 'string' ? data : JSON.stringify(data);
-      socket.send(message);
-    } else {
-      console.error('WebSocket is not connected. Cannot send message.');
-    }
-  }, [socket]);
+  // Add keepalive ping to prevent connection timeout
+  useEffect(() => {
+    if (!isConnected || !url) return;
+    
+    const pingInterval = setInterval(() => {
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        try {
+          sendMessage({ type: 'ping', timestamp: Date.now() });
+        } catch (err) {
+          console.warn('Failed to send keepalive ping to', url, err);
+        }
+      }
+    }, 30000); // 30 seconds
+    
+    return () => clearInterval(pingInterval);
+  }, [isConnected, sendMessage, url]);
 
-  return { socket, isConnected, lastMessage, sendMessage };
+  return { socket: socketRef.current, isConnected, lastMessage, sendMessage };
 };
 
 export default useWebSocketConnection;
