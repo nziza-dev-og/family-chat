@@ -2,7 +2,7 @@
 import { db, auth } from "@/lib/firebase";
 import { 
   collection, doc, getDoc, getDocs, updateDoc, 
-  arrayUnion, query, where, serverTimestamp, setDoc, DocumentData, orderBy, limit, startAfter, QueryDocumentSnapshot, collectionGroup, onSnapshot
+  arrayUnion, query, where, serverTimestamp, setDoc, DocumentData, orderBy, limit, startAfter, QueryDocumentSnapshot, collectionGroup, onSnapshot, addDoc
 } from "firebase/firestore";
 import type { User as FirebaseUserType } from "firebase/auth"; // Renamed to avoid conflict
 
@@ -108,6 +108,11 @@ export async function getOrCreateChatWithUser(currentUserId: string, otherUserId
   if (chatDocSnap.exists()) {
     return chatDocSnap.id;
   } else {
+    // Fetch other user's details to potentially store in participantInfo
+    // const otherUserDocRef = doc(db, "users", otherUserId);
+    // const otherUserDocSnap = await getDoc(otherUserDocRef);
+    // const otherUserDetails = otherUserDocSnap.exists() ? otherUserDocSnap.data() : { displayName: "User", photoURL: null };
+
     await setDoc(chatDocRef, {
       participants: sortedUserIds,
       isGroup: false,
@@ -120,8 +125,8 @@ export async function getOrCreateChatWithUser(currentUserId: string, otherUserId
       // }
     });
     // Also create a messages subcollection
-    const messagesColRef = collection(chatDocRef, "messages");
-    // console.log(\`Created new chat ${chatDocRef.id} and messages subcollection\`);
+    // const messagesColRef = collection(chatDocRef, "messages");
+    // console.log(`Created new chat ${chatDocRef.id} and messages subcollection`);
     return chatDocRef.id;
   }
 }
@@ -160,6 +165,10 @@ export async function getUserChats(userId: string): Promise<ChatListItem[]> {
           chatListItem.name = partnerData.displayName || "User";
           chatListItem.avatar = partnerData.photoURL || "https://placehold.co/100x100.png";
           chatListItem.dataAiHint = "person portrait";
+        } else {
+          chatListItem.name = "User";
+          chatListItem.avatar = "https://placehold.co/100x100.png";
+          chatListItem.dataAiHint = "person portrait";
         }
       }
     }
@@ -177,5 +186,37 @@ function formatTimestamp(date: Date): string {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } else {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+}
+
+export async function addMissedCallMessage(
+  chatId: string, 
+  callType: 'audio' | 'video', 
+  _originalCallerId: string, // Not used in message text but kept for context
+  calleeWhoMissedId: string
+): Promise<void> {
+  if (!chatId || !calleeWhoMissedId) {
+    console.error("chatId and calleeWhoMissedId are required for missed call message");
+    return;
+  }
+
+  const messageText = `Missed ${callType} call`;
+  const messagesColRef = collection(db, "chats", chatId, "messages");
+  const chatDocRef = doc(db, "chats", chatId);
+
+  try {
+    await addDoc(messagesColRef, {
+      senderId: calleeWhoMissedId, // Message attributed to the person who missed the call
+      text: messageText,
+      timestamp: serverTimestamp(),
+      type: 'event_missed_call', // Special type for potential distinct styling
+    });
+    await updateDoc(chatDocRef, {
+      lastMessage: { text: messageText, senderId: calleeWhoMissedId },
+      lastMessageTimestamp: serverTimestamp(),
+    });
+    console.log(`Added missed call message to chat ${chatId}`);
+  } catch (error) {
+    console.error("Error adding missed call message:", error);
   }
 }
