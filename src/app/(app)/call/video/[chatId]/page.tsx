@@ -59,7 +59,7 @@ export default function VideoCallPage() {
 
 
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    console.log("Cleaning up video call for chatId:", chatId, "Update Firestore:", updateFirestoreStatus);
+    console.log("Cleaning up video call for chatId:", chatId, "Update Firestore:", updateFirestoreStatus, "CallerInitiatedEnd:", isCallerInitiatedEnd);
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
@@ -83,13 +83,14 @@ export default function VideoCallPage() {
             const callSnap = await getDoc(callDocRef);
             if (callSnap.exists()) {
                 const callData = callSnap.data();
-                // Only the original caller or callee involved in this specific call document should update/delete it.
                 if (callData.callerId === user.uid || callData.calleeId === user.uid) {
                     if (isCallerInitiatedEnd && callData.callerId === user.uid && callData.status === 'ringing' && chatPartner) {
-                        // Caller ended before callee picked up. Log missed call for callee.
                         await addMissedCallMessage(chatId, 'video', user.uid, chatPartner.uid);
                     }
-                    await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
+                     // Only update status to ended if it's not already declined or ended by other actions
+                    if (callData.status !== 'ended' && callData.status !== 'declined') {
+                        await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
+                    }
                     
                     const iceCandidatesSnap = await getDocs(iceCandidateCollectionRef);
                     const batch = writeBatch(db);
@@ -101,8 +102,10 @@ export default function VideoCallPage() {
             console.warn("Error during call document cleanup:", error);
         }
     }
-    setCallStatus("Call Ended");
-  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner]);
+    if (callStatus !== "Call Ended") {
+        setCallStatus("Call Ended");
+    }
+  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner, callStatus, toast]);
 
 
   useEffect(() => {
@@ -150,11 +153,17 @@ export default function VideoCallPage() {
   }, [chatId, user, router, toast]);
 
   useEffect(() => {
-    if (authLoading || isLoadingPartner || !user || !chatPartner) return;
+    if (authLoading || isLoadingPartner || !user || !chatPartner) {
+        return;
+    }
 
-    // If this call was initiated by an incoming call dialog, clear it.
+    if (peerConnectionRef.current) {
+        // console.log("Video call already initialized, skipping re-initialization.");
+        return;
+    }
+
     if (incomingCall && incomingCall.chatId === chatId) {
-      clearIncomingCall('answered'); // Cleared as answered/navigated to call page
+      clearIncomingCall('answered');
     }
 
     const initialize = async () => {
@@ -171,7 +180,7 @@ export default function VideoCallPage() {
         peerConnectionRef.current = new RTCPeerConnection(ICE_SERVERS);
 
         localStreamRef.current.getTracks().forEach(track => {
-          if(localStreamRef.current) peerConnectionRef.current!.addTrack(track, localStreamRef.current);
+          if(localStreamRef.current && peerConnectionRef.current) peerConnectionRef.current.addTrack(track, localStreamRef.current);
         });
 
         remoteStreamRef.current = new MediaStream();
@@ -180,10 +189,12 @@ export default function VideoCallPage() {
         }
         peerConnectionRef.current.ontrack = event => {
           event.streams[0].getTracks().forEach(track => {
-            remoteStreamRef.current!.addTrack(track);
+            if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
           });
           setCallStatus("Connected");
-          updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
+          if (user) {
+             updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
+          }
         };
 
         peerConnectionRef.current.onicecandidate = event => {
@@ -191,7 +202,7 @@ export default function VideoCallPage() {
             addDoc(iceCandidateCollectionRef, {
               candidate: event.candidate.toJSON(),
               senderId: user.uid,
-              recipientId: chatPartner.uid, // Send to the specific partner
+              recipientId: chatPartner.uid,
             });
           }
         };
@@ -214,15 +225,10 @@ export default function VideoCallPage() {
     initialize();
 
     return () => {
-      const isCaller = peerConnectionRef.current && user && chatPartner && 
-                       (async () => {
-                         const callSnap = await getDoc(callDocRef);
-                         return callSnap.exists() && callSnap.data()?.callerId === user.uid;
-                       })();
-      cleanupCall(true, !!isCaller); 
+      cleanupCall(true, false); 
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, isLoadingPartner, chatPartner]); // Removed clearIncomingCall from deps
+  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall]);
 
 
   const setupSignaling = useCallback(async () => {
@@ -231,10 +237,10 @@ export default function VideoCallPage() {
 
     callDocUnsubscribeRef.current = onSnapshot(callDocRef, async (snapshot) => {
       const data = snapshot.data();
-      if (!data) { // Call doc might have been deleted
-        if (callStatus !== "Call Ended") { // Avoid multiple toasts if already ended by self
+      if (!data) {
+        if (callStatus !== "Call Ended") {
            toast({ title: "Call Ended", description: "The call was terminated." });
-           await cleanupCall(false); // Don't try to update Firestore if doc is gone
+           await cleanupCall(false);
            router.back();
         }
         return;
@@ -243,24 +249,25 @@ export default function VideoCallPage() {
       if (data.status === 'declined' || data.status === 'ended') {
         if (callStatus !== "Call Ended") {
           toast({ title: "Call Ended", description: `The call was ${data.status}.` });
-          await cleanupCall(false); // Status already set by other party or cleanup
+          await cleanupCall(false);
           router.back();
         }
         return;
       }
 
-      // Callee: Offer received from caller, create answer
       if (data.offer && data.calleeId === user.uid && !pc.currentRemoteDescription && data.status === 'ringing') {
         setCallStatus("Offer received, creating answer...");
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          await updateDoc(callDocRef, { 
-              answer: pc.localDescription!.toJSON(), 
-              status: "answered", 
-              updatedAt: Timestamp.now()
-          });
+          if (pc.localDescription) {
+            await updateDoc(callDocRef, { 
+                answer: pc.localDescription.toJSON(), 
+                status: "answered", 
+                updatedAt: Timestamp.now()
+            });
+          }
           setCallStatus("Answer sent, connecting...");
         } catch (e) {
             console.error("Error processing offer or creating answer:", e);
@@ -269,8 +276,7 @@ export default function VideoCallPage() {
         }
       }
 
-      // Caller: Answer received from callee
-      if (data.answer && data.callerId === user.uid && pc.signalingState === "have-local-offer") { // Check signalingState
+      if (data.answer && data.callerId === user.uid && pc.signalingState === "have-local-offer") {
          if (!pc.currentRemoteDescription) { 
             setCallStatus("Answer received, connecting...");
             try {
@@ -284,7 +290,6 @@ export default function VideoCallPage() {
       }
     });
 
-    // Listen for ICE candidates sent to the current user
     const qIceCandidates = query(
       iceCandidateCollectionRef,
       where("recipientId", "==", user.uid)
@@ -303,23 +308,23 @@ export default function VideoCallPage() {
       });
     });
 
-    // Caller: Create offer if no call document or if it's stale/not for us
     const callSnap = await getDoc(callDocRef);
     if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid)) {
-       // This condition means it's a new call initiation by the current user
         setCallStatus("Creating offer...");
         try {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            await setDoc(callDocRef, { 
-                offer: pc.localDescription!.toJSON(), 
-                callerId: user.uid,
-                calleeId: chatPartner.uid,
-                callType: 'video',
-                status: 'ringing',
-                createdAt: Timestamp.now(),
-                updatedAt: Timestamp.now(),
-            });
+            if (pc.localDescription) {
+                await setDoc(callDocRef, { 
+                    offer: pc.localDescription.toJSON(), 
+                    callerId: user.uid,
+                    calleeId: chatPartner.uid,
+                    callType: 'video',
+                    status: 'ringing',
+                    createdAt: Timestamp.now(),
+                    updatedAt: Timestamp.now(),
+                });
+            }
             setCallStatus("Calling partner, waiting for answer...");
         } catch (e) {
             console.error("Error creating offer:", e);
@@ -327,10 +332,8 @@ export default function VideoCallPage() {
             toast({title: "Call Error", description: "Could not initiate the call.", variant: "destructive"});
         }
     } else if (callSnap.exists() && callSnap.data()?.callerId === user.uid && !callSnap.data()?.answer && callSnap.data()?.status === 'ringing') {
-        // Caller re-joined or refreshed, offer already sent, just wait
         setCallStatus("Calling partner, waiting for answer..."); 
     } else if (callSnap.exists() && callSnap.data()?.calleeId === user.uid && callSnap.data()?.status === 'ringing' && !callSnap.data()?.answer) {
-        // Callee joined, offer should be in callSnap.data().offer, will be handled by onSnapshot listener.
         setCallStatus("Waiting for connection setup...");
     }
 
@@ -358,18 +361,20 @@ export default function VideoCallPage() {
   };
 
   const handleEndCall = async () => {
-    let isCallerInitiatedEnd = false;
+    let isCallerEndingRingingCall = false;
     if (user && chatPartner && peerConnectionRef.current) {
       const callSnap = await getDoc(callDocRef);
       if (callSnap.exists()) {
         const callData = callSnap.data();
         if (callData.callerId === user.uid && callData.status === 'ringing') {
-          isCallerInitiatedEnd = true; // Caller is ending a call that the callee did not answer
+          isCallerEndingRingingCall = true;
         }
       }
     }
-    await cleanupCall(true, isCallerInitiatedEnd);
-    toast({ title: "Call Ended" });
+    await cleanupCall(true, isCallerEndingRingingCall);
+    if (callStatus !== "Call Ended") {
+        toast({ title: "Call Ended" });
+    }
     router.back(); 
   };
 
@@ -383,8 +388,6 @@ export default function VideoCallPage() {
   }
   
   if (!user || !chatPartner) {
-    // This case should ideally be handled by redirection in useEffect if user/partner can't be determined.
-    // Adding a fallback UI just in case.
     return (
       <div className="flex flex-col h-screen items-center justify-center bg-gray-900 text-white">
         <ShieldAlert className="h-12 w-12 text-red-500" />
@@ -398,7 +401,7 @@ export default function VideoCallPage() {
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white">
       <header className="flex items-center p-3 border-b border-gray-700 bg-gray-800 sticky top-0 z-20">
-        <Button variant="ghost" size="icon" className="mr-2 text-white hover:bg-gray-700" onClick={() => router.back()}> {/* Changed to router.back() for simple back navigation if call hasn't started */}
+        <Button variant="ghost" size="icon" className="mr-2 text-white hover:bg-gray-700" onClick={() => router.back()}>
           <ArrowLeft className="h-5 w-5" />
         </Button>
         {chatPartner && (
@@ -451,7 +454,7 @@ export default function VideoCallPage() {
           <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended"}>
             {isMicMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
           </Button>
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended"}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended" || isCameraOff}>
             {isCameraOff ? <VideoOff className="h-6 w-6" /> : <Video className="h-6 w-6" />}
           </Button>
           <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended"}>
