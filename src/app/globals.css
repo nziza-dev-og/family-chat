@@ -1,3 +1,4 @@
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -106,15 +107,29 @@
   }
 }
 
-/* Custom WhatsApp-like background for auth pages */
+/* 
+  Custom WhatsApp-like background for auth pages.
+  The current implementation uses a very light green and a subtle diagonal line pattern.
+  To add "materials" or doodles like WhatsApp's official background, you would typically use
+  a repeating background image (SVG or PNG). 
+  Example:
+  background-image: 
+    repeating-linear-gradient( ... ), /* current lines * /
+    url('/path/to/your/doodle-pattern.svg'); /* your doodle pattern * /
+  background-size: 
+    auto, /* for lines * /
+    300px 300px; /* example size for doodle pattern * /
+  background-blend-mode: multiply; /* or other blend mode * /
+
+  Ensure any doodle pattern you use is properly licensed.
+*/
 .bg-whatsapp-auth {
-  background-color: hsl(80, 30%, 92%); /* Light muted green */
-  /* Subtle diagonal lines pattern for texture */
+  background-color: hsl(80, 40%, 90%); /* Slightly more saturated light muted green */
   background-image: repeating-linear-gradient(
     45deg,
-    hsla(0, 0%, 0%, 0.02) 0,      /* Faint dark lines */
-    hsla(0, 0%, 0%, 0.02) 1px,
+    hsla(80, 20%, 50%, 0.03) 0,      /* Fainter, slightly greener lines */
+    hsla(80, 20%, 50%, 0.03) 1px,
     transparent 1px,
-    transparent 15px               /* Spacing of lines */
+    transparent 20px               /* Slightly wider spacing */
   );
 }

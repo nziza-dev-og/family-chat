@@ -13,13 +13,14 @@ export interface StatusDisplay {
   userAvatar?: string | null;
   type: 'text' | 'image';
   content: string; // text or imageURL
+  caption?: string; // Optional caption for image/video statuses
   createdAt: Timestamp; // Firestore Timestamp
   expiresAt: Timestamp; // Firestore Timestamp
   dataAiHint?: string;
 }
 
 export interface UserStatusGroup {
-  userId: string;
+  userId:string;
   userName?: string | null;
   userAvatar?: string | null;
   statuses: StatusDisplay[];
@@ -60,7 +61,7 @@ export async function addTextStatus(userId: string, text: string): Promise<void>
   });
 }
 
-export async function addImageStatus(userId: string, file: File): Promise<void> {
+export async function addImageStatus(userId: string, file: File, caption?: string): Promise<void> {
   if (!userId || !file) throw new Error("User ID and file are required.");
 
   const filePath = `statusImages/${userId}/${Date.now()}_${file.name}`;
@@ -74,7 +75,7 @@ export async function addImageStatus(userId: string, file: File): Promise<void> 
   
   const userData = await getUserData(userId);
 
-  await addDoc(statusesColRef, {
+  const statusData: any = {
     userId,
     userName: userData.displayName,
     userAvatar: userData.photoURL,
@@ -82,7 +83,13 @@ export async function addImageStatus(userId: string, file: File): Promise<void> 
     content: downloadURL,
     createdAt: serverTimestamp(),
     expiresAt: Timestamp.fromDate(expirationDate),
-  });
+  };
+
+  if (caption && caption.trim() !== "") {
+    statusData.caption = caption.trim();
+  }
+
+  await addDoc(statusesColRef, statusData);
 }
 
 // Fetches statuses for a list of user IDs (currentUser + friends)
@@ -95,6 +102,8 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
   const userStatusMap: Map<string, UserStatusGroup> = new Map();
 
   // Firestore 'in' query limit is 30. Chunking for safety.
+  // The query below might require a composite index in Firestore. 
+  // If you see errors related to indexing, please create the index in your Firebase console.
   const chunkSize = 30;
   for (let i = 0; i < currentUserAndFriendUIDs.length; i += chunkSize) {
     const chunk = currentUserAndFriendUIDs.slice(i, i + chunkSize);
@@ -111,7 +120,7 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
     const statusSnap = await getDocs(q);
 
     for (const docSnap of statusSnap.docs) {
-        const data = docSnap.data() as DocumentData; // Cast to satisfy TS
+        const data = docSnap.data() as DocumentData; 
         const statusItem: StatusDisplay = {
             id: docSnap.id,
             userId: data.userId,
@@ -119,6 +128,7 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
             userAvatar: data.userAvatar,
             type: data.type,
             content: data.content,
+            caption: data.caption, // Add caption here
             createdAt: data.createdAt as Timestamp,
             expiresAt: data.expiresAt as Timestamp,
             dataAiHint: data.type === 'image' ? 'status image' : undefined,
@@ -130,17 +140,15 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
                 userName: data.userName,
                 userAvatar: data.userAvatar,
                 statuses: [],
-                dataAiHint: "person portrait" // Default hint for user avatar
+                dataAiHint: "person portrait" 
             });
         }
         userStatusMap.get(data.userId)!.statuses.push(statusItem);
     }
   }
   
-  // Update lastStatusTime for each group
   userStatusMap.forEach(group => {
     if (group.statuses.length > 0) {
-      // Ensure statuses are sorted by createdAt descending if not already
       group.statuses.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
       group.lastStatusTime = formatStatusTimestamp(group.statuses[0].createdAt.toDate());
     }
@@ -151,7 +159,7 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
 
 
 // Helper to format timestamp for status display
-function formatStatusTimestamp(date: Date): string {
+export function formatStatusTimestamp(date: Date): string {
   if (!date) return "";
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -159,18 +167,25 @@ function formatStatusTimestamp(date: Date): string {
   const diffMins = Math.round(diffSecs / 60);
   const diffHours = Math.round(diffMins / 60);
 
+  if (diffSecs < 5) return "Just now";
   if (diffSecs < 60) return `${diffSecs} seconds ago`;
   if (diffMins < 60) return `${diffMins} minutes ago`;
-  if (diffHours < 24) return `${diffHours} hours ago`;
   
-  // For older than 24h but still valid (should not happen often with 24h expiry)
-  // Or if we want to show "Yesterday" etc.
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const statusDateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diffDays = Math.round((today.getTime() - statusDateOnly.getTime()) / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) return `${diffHours} hours ago`; // Should be caught by diffHours < 24
-  if (diffDays === 1) return "Yesterday";
+  if (diffHours < today.getHours() && diffDays === 0) { // Same day, less than `now.getHours()` ago
+    return `${diffHours} hours ago`;
+  }
   
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (diffDays === 0) { // Today
+    return `Today at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+  if (diffDays === 1) {
+    return `Yesterday at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  }
+  
+  // Fallback for older dates, though statuses expire in 24h
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }

@@ -4,7 +4,7 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Camera, Edit3, Loader2, Plus, FileImage, AlignLeft } from "lucide-react";
+import { Camera, Edit3, Loader2, Plus, FileImage, AlignLeft, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState, useRef, type ChangeEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
@@ -12,9 +12,10 @@ import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { addTextStatus, addImageStatus, getStatusesForUserList, type UserStatusGroup, type StatusDisplay } from "@/lib/statusActions";
+import { addTextStatus, addImageStatus, getStatusesForUserList, type UserStatusGroup, type StatusDisplay, formatStatusTimestamp } from "@/lib/statusActions";
 import { getFriends, type ChatUser } from "@/lib/chatActions"; // To get friend UIDs
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Label } from "@/components/ui/label";
 
 export default function StatusPage() {
   const { user, loading: authLoading } = useAuth();
@@ -27,6 +28,7 @@ export default function StatusPage() {
   const [isTextStatusModalOpen, setIsTextStatusModalOpen] = useState(false);
   const [isImageStatusModalOpen, setIsImageStatusModalOpen] = useState(false);
   const [newTextStatus, setNewTextStatus] = useState("");
+  const [statusImageCaption, setStatusImageCaption] = useState("");
   const [selectedStatusFile, setSelectedStatusFile] = useState<File | null>(null);
   const statusFileInputRef = useRef<HTMLInputElement>(null);
   const [isPostingStatus, setIsPostingStatus] = useState(false);
@@ -40,9 +42,11 @@ export default function StatusPage() {
       const fetchAllStatuses = async () => {
         setIsLoadingStatus(true);
         try {
-          const friendsList = await getFriends(user.uid);
+          // For simplicity, assume "friends" are users you have chats with or a defined friend list.
+          // This might need refinement based on your app's friendship model.
+          const friendsList = await getFriends(user.uid); 
           const friendUIDs = friendsList.map(f => f.uid);
-          const allUIDs = [user.uid, ...friendUIDs];
+          const allUIDs = Array.from(new Set([user.uid, ...friendUIDs])); // Ensure unique UIDs
           
           const fetchedStatusGroups = await getStatusesForUserList(allUIDs);
           
@@ -52,9 +56,19 @@ export default function StatusPage() {
           setMyStatusGroups(myGroups);
           setFriendsStatusGroups(othersGroups);
 
-        } catch (error) {
+        } catch (error: any) {
           console.error("Failed to fetch statuses:", error);
-          toast({ title: "Error", description: "Could not load statuses.", variant: "destructive" });
+          // Check if error is due to missing index and guide user.
+          if (error.code === 'failed-precondition' && error.message.includes('index')) {
+             toast({ 
+              title: "Firestore Index Required", 
+              description: "A Firestore index is needed for status queries. Please create it in your Firebase console. The exact index details should be in your browser's console log.", 
+              variant: "destructive",
+              duration: 10000 // Show longer
+            });
+          } else {
+            toast({ title: "Error", description: "Could not load statuses.", variant: "destructive" });
+          }
         } finally {
           setIsLoadingStatus(false);
         }
@@ -62,6 +76,24 @@ export default function StatusPage() {
       fetchAllStatuses();
     }
   }, [user, authLoading, toast]);
+
+  const refreshStatuses = async () => {
+    if(!user) return;
+    // setIsLoadingStatus(true); // Optional: show loader during refresh
+    try {
+        const friendsList = await getFriends(user.uid);
+        const friendUIDs = friendsList.map(f => f.uid);
+        const allUIDs = Array.from(new Set([user.uid, ...friendUIDs]));
+        const updatedStatuses = await getStatusesForUserList(allUIDs);
+        setMyStatusGroups(updatedStatuses.filter(group => group.userId === user.uid));
+        setFriendsStatusGroups(updatedStatuses.filter(group => group.userId !== user.uid));
+    } catch (error: any) {
+        console.error("Failed to refresh statuses:", error);
+        toast({ title: "Error", description: "Could not refresh statuses.", variant: "destructive" });
+    } finally {
+        // setIsLoadingStatus(false);
+    }
+  }
 
   const handlePostTextStatus = async () => {
     if (!user || !newTextStatus.trim()) return;
@@ -71,14 +103,7 @@ export default function StatusPage() {
       toast({ title: "Success", description: "Status posted." });
       setIsTextStatusModalOpen(false);
       setNewTextStatus("");
-      // Refresh statuses
-      const friendsList = await getFriends(user.uid);
-      const friendUIDs = friendsList.map(f => f.uid);
-      const allUIDs = [user.uid, ...friendUIDs];
-      const updatedStatuses = await getStatusesForUserList(allUIDs);
-      setMyStatusGroups(updatedStatuses.filter(group => group.userId === user.uid));
-      setFriendsStatusGroups(updatedStatuses.filter(group => group.userId !== user.uid));
-
+      await refreshStatuses();
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to post status.", variant: "destructive" });
     } finally {
@@ -96,18 +121,13 @@ export default function StatusPage() {
     if (!user || !selectedStatusFile) return;
     setIsPostingStatus(true);
     try {
-      await addImageStatus(user.uid, selectedStatusFile);
+      await addImageStatus(user.uid, selectedStatusFile, statusImageCaption);
       toast({ title: "Success", description: "Status posted." });
       setIsImageStatusModalOpen(false);
       setSelectedStatusFile(null);
+      setStatusImageCaption("");
       if(statusFileInputRef.current) statusFileInputRef.current.value = "";
-       // Refresh statuses
-      const friendsList = await getFriends(user.uid);
-      const friendUIDs = friendsList.map(f => f.uid);
-      const allUIDs = [user.uid, ...friendUIDs];
-      const updatedStatuses = await getStatusesForUserList(allUIDs);
-      setMyStatusGroups(updatedStatuses.filter(group => group.userId === user.uid));
-      setFriendsStatusGroups(updatedStatuses.filter(group => group.userId !== user.uid));
+      await refreshStatuses();
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to post image status.", variant: "destructive" });
     } finally {
@@ -118,6 +138,7 @@ export default function StatusPage() {
   const openStatusViewer = (group: UserStatusGroup) => {
     setViewingStatus(group);
     setCurrentStatusIndex(0);
+    // TODO: Mark statuses as viewed here or on advancing
   };
 
   const closeStatusViewer = () => {
@@ -128,7 +149,7 @@ export default function StatusPage() {
     if (viewingStatus && currentStatusIndex < viewingStatus.statuses.length - 1) {
       setCurrentStatusIndex(prev => prev + 1);
     } else {
-      closeStatusViewer(); // Close if it's the last status
+      closeStatusViewer(); 
     }
   };
 
@@ -138,10 +159,9 @@ export default function StatusPage() {
     }
   };
 
-
-  const myCurrentStatus = myStatusGroups.length > 0 ? myStatusGroups[0] : null;
-  const viewedUpdates = friendsStatusGroups.filter(group => group.statuses.some(s => false)); // Placeholder for viewed logic
-  const recentUpdates = friendsStatusGroups.filter(group => !viewedUpdates.find(vg => vg.userId === group.userId));
+  const myCurrentStatusGroup = myStatusGroups.length > 0 ? myStatusGroups[0] : null;
+  // Placeholder for viewed logic: assume recent means unviewed for styling
+  const recentUpdates = friendsStatusGroups.filter(group => group.statuses.length > 0);
 
 
   if (authLoading || !user) {
@@ -165,24 +185,30 @@ export default function StatusPage() {
           {/* My Status */}
           <Card 
             className="mb-2 shadow-none border-0 rounded-none hover:bg-secondary/50 cursor-pointer"
-            onClick={() => myCurrentStatus && openStatusViewer(myCurrentStatus)}
+            onClick={() => myCurrentStatusGroup && openStatusViewer(myCurrentStatusGroup)}
           >
             <CardContent className="p-3 flex items-center space-x-3">
               <div className="relative">
-                <Avatar className="h-12 w-12">
+                <Avatar className={`h-12 w-12 ${myCurrentStatusGroup ? 'border-2 border-primary' : ''}`}>
                   <AvatarImage src={user.photoURL || undefined} alt="My Status" data-ai-hint="person portrait" />
-                  <AvatarFallback>{user.displayName?.substring(0,1) || "U"}</AvatarFallback>
+                  <AvatarFallback>{user.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                 </Avatar>
-                {!myCurrentStatus && (
-                  <div className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center border-2 border-background">
-                    <Plus className="h-3 w-3" />
-                  </div>
+                {(!myCurrentStatusGroup || myCurrentStatusGroup.statuses.length === 0) && (
+                  <DialogTrigger asChild>
+                     <button 
+                        onClick={(e) => { e.stopPropagation(); setIsImageStatusModalOpen(true);}} 
+                        className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center border-2 border-background cursor-pointer hover:bg-primary/80"
+                        aria-label="Add status"
+                      >
+                        <Plus className="h-3 w-3" />
+                     </button>
+                  </DialogTrigger>
                 )}
               </div>
               <div className="flex-1">
                 <p className="font-semibold">My Status</p>
                 <p className="text-sm text-muted-foreground">
-                  {myCurrentStatus ? `${myCurrentStatus.statuses.length} update${myCurrentStatus.statuses.length > 1 ? 's' : ''} \u00B7 ${myCurrentStatus.lastStatusTime}` : "Tap to add status update"}
+                  {myCurrentStatusGroup ? `${myCurrentStatusGroup.statuses.length} update${myCurrentStatusGroup.statuses.length > 1 ? 's' : ''} \u00B7 ${myCurrentStatusGroup.lastStatusTime}` : "Tap to add status update"}
                 </p>
               </div>
             </CardContent>
@@ -200,7 +226,7 @@ export default function StatusPage() {
                   <CardContent className="p-3 flex items-center space-x-3">
                     <Avatar className="h-12 w-12 border-2 border-primary">
                       <AvatarImage src={group.userAvatar || undefined} alt={group.userName || "User"} data-ai-hint={group.dataAiHint || "person"} />
-                      <AvatarFallback>{group.userName?.substring(0,1) || "U"}</AvatarFallback>
+                      <AvatarFallback>{group.userName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
                       <p className="font-semibold">{group.userName}</p>
@@ -215,7 +241,6 @@ export default function StatusPage() {
         </ScrollArea>
       )}
       
-      {/* Floating Action Buttons */}
       <div className="fixed bottom-20 right-6 md:bottom-6 md:right-6 z-20 flex flex-col space-y-3">
         <Dialog open={isTextStatusModalOpen} onOpenChange={setIsTextStatusModalOpen}>
             <DialogTrigger asChild>
@@ -246,17 +271,30 @@ export default function StatusPage() {
             <DialogTrigger asChild>
                 <Button size="icon" className="rounded-full h-14 w-14 shadow-lg bg-primary hover:bg-primary/90">
                     <Camera className="h-6 w-6 text-primary-foreground" />
-                    <span className="sr-only">New photo/video status</span>
+                    <span className="sr-only">New photo status</span>
                 </Button>
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader><DialogTitle>Add Image Status</DialogTitle></DialogHeader>
-                <div className="my-4">
-                    <Input type="file" accept="image/*" onChange={handleStatusFileChange} ref={statusFileInputRef} />
-                    {selectedStatusFile && <p className="text-sm text-muted-foreground mt-2">Selected: {selectedStatusFile.name}</p>}
+                <div className="my-4 space-y-4">
+                    <div>
+                      <Label htmlFor="status-image-upload">Choose image</Label>
+                      <Input id="status-image-upload" type="file" accept="image/*" onChange={handleStatusFileChange} ref={statusFileInputRef} />
+                      {selectedStatusFile && <p className="text-sm text-muted-foreground mt-2">Selected: {selectedStatusFile.name}</p>}
+                    </div>
+                    <div>
+                      <Label htmlFor="status-image-caption">Caption (optional)</Label>
+                      <Textarea 
+                        id="status-image-caption"
+                        placeholder="Add a caption..." 
+                        value={statusImageCaption}
+                        onChange={(e) => setStatusImageCaption(e.target.value)}
+                        rows={3}
+                      />
+                    </div>
                 </div>
                  <DialogFooter>
-                    <DialogClose asChild><Button variant="outline" onClick={() => setSelectedStatusFile(null)}>Cancel</Button></DialogClose>
+                    <DialogClose asChild><Button variant="outline" onClick={() => {setSelectedStatusFile(null); setStatusImageCaption(""); if(statusFileInputRef.current) statusFileInputRef.current.value = "";}}>Cancel</Button></DialogClose>
                     <Button onClick={handlePostImageStatus} disabled={isPostingStatus || !selectedStatusFile}>
                         {isPostingStatus && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>} Post
                     </Button>
@@ -268,63 +306,74 @@ export default function StatusPage() {
       {/* Status Viewer Modal */}
       {viewingStatus && viewingStatus.statuses.length > 0 && (
         <div 
-            className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4"
-            onClick={nextStatus} // Click anywhere on backdrop to go to next or close
+            className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-0" // p-0 for full screen feel
+            onClick={(e) => { e.stopPropagation(); nextStatus();}} // Click anywhere on backdrop to go to next or close
         >
-            <div className="absolute top-4 left-4 flex items-center space-x-2 z-10">
-                <Avatar className="h-8 w-8 border-2 border-white">
-                    <AvatarImage src={viewingStatus.userAvatar || undefined} />
-                    <AvatarFallback>{viewingStatus.userName?.substring(0,1)}</AvatarFallback>
-                </Avatar>
-                <div>
-                    <p className="text-white font-semibold">{viewingStatus.userName}</p>
-                    <p className="text-xs text-gray-300">{formatStatusTimestamp(viewingStatus.statuses[currentStatusIndex].createdAt.toDate())}</p>
-                </div>
-            </div>
-            <Button variant="ghost" size="icon" className="absolute top-4 right-4 z-10 text-white hover:bg-white/20" onClick={(e) => { e.stopPropagation(); closeStatusViewer(); }}>
-                <X className="h-6 w-6"/>
-            </Button>
-            
             {/* Progress bars for multiple statuses */}
             {viewingStatus.statuses.length > 1 && (
-              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[90%] max-w-md flex space-x-1 z-10 px-4">
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[95%] max-w-xl flex space-x-1 z-[52] px-2">
                 {viewingStatus.statuses.map((_, idx) => (
-                  <div key={idx} className="h-1 flex-1 bg-white/30 rounded-full">
+                  <div key={idx} className="h-1 flex-1 bg-white/40 rounded-full overflow-hidden">
                     <div 
                       className={`h-full rounded-full ${idx <= currentStatusIndex ? 'bg-white' : ''}`}
-                      style={{ width: idx === currentStatusIndex ? '100%' : (idx < currentStatusIndex ? '100%' : '0%') }} // Simplified progress
+                      // TODO: Implement timed progress for automatic advance
+                      style={{ width: idx === currentStatusIndex ? '100%' : (idx < currentStatusIndex ? '100%' : '0%') }} 
                     />
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="relative max-w-full max-h-[80vh] flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-[52]">
+                <div className="flex items-center space-x-2">
+                    <Avatar className="h-9 w-9 border border-white/50">
+                        <AvatarImage src={viewingStatus.userAvatar || undefined} />
+                        <AvatarFallback>{viewingStatus.userName?.substring(0,1).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                        <p className="text-white font-semibold text-sm">{viewingStatus.userName}</p>
+                        <p className="text-xs text-gray-300">{formatStatusTimestamp(viewingStatus.statuses[currentStatusIndex].createdAt.toDate())}</p>
+                    </div>
+                </div>
+                <Button variant="ghost" size="icon" className="text-white hover:bg-white/20" onClick={(e) => { e.stopPropagation(); closeStatusViewer(); }}>
+                    <X className="h-5 w-5"/>
+                </Button>
+            </div>
+            
+            <div className="relative w-full h-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                 {viewingStatus.statuses[currentStatusIndex].type === 'image' ? (
-                    <Image 
-                        src={viewingStatus.statuses[currentStatusIndex].content} 
-                        alt="Status image" 
-                        layout="intrinsic"
-                        width={800} // Adjust as needed, aspect ratio will be maintained
-                        height={800} // Adjust as needed
-                        objectFit="contain"
-                        className="rounded-lg"
-                        data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
-                    />
-                ) : (
-                    <div className="bg-primary p-8 rounded-lg text-center max-w-md">
-                        <p className="text-2xl text-primary-foreground whitespace-pre-wrap">
+                    <div className="flex flex-col items-center justify-center max-h-full max-w-full">
+                        <Image 
+                            src={viewingStatus.statuses[currentStatusIndex].content} 
+                            alt="Status image" 
+                            layout="intrinsic" 
+                            width={1080} // Max typical screen width
+                            height={1920} // Max typical screen height
+                            objectFit="contain"
+                            className="max-h-[calc(100vh-100px)] max-w-full rounded-none md:rounded-lg" // Adjust max height for caption space
+                            data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
+                            priority // Load current status image with priority
+                        />
+                        {viewingStatus.statuses[currentStatusIndex].caption && (
+                            <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
+                                {viewingStatus.statuses[currentStatusIndex].caption}
+                            </p>
+                        )}
+                    </div>
+                ) : ( // Text Status
+                    <div className="bg-primary p-8 rounded-lg text-center max-w-md flex items-center justify-center aspect-square">
+                        <p className="text-3xl text-primary-foreground whitespace-pre-wrap">
                             {viewingStatus.statuses[currentStatusIndex].content}
                         </p>
                     </div>
                 )}
             </div>
 
-            {/* Navigation for multi-status (optional, click on sides) */}
+            {/* Navigation Areas */}
             {viewingStatus.statuses.length > 1 && (
                  <>
-                    <div className="absolute left-0 top-1/2 -translate-y-1/2 h-full w-1/3 cursor-pointer z-10" onClick={(e) => { e.stopPropagation(); prevStatus(); }}/>
-                    <div className="absolute right-0 top-1/2 -translate-y-1/2 h-full w-1/3 cursor-pointer z-10" onClick={(e) => { e.stopPropagation(); nextStatus(); }}/>
+                    <div className="absolute left-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); prevStatus(); }}/>
+                    <div className="absolute right-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); nextStatus(); }}/>
                  </>
             )}
         </div>
@@ -333,4 +382,3 @@ export default function StatusPage() {
     </div>
   );
 }
-
