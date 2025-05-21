@@ -27,13 +27,13 @@ export default function StatusPage() {
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
 
   const [isTextStatusModalOpen, setIsTextStatusModalOpen] = useState(false);
-  const [isMediaStatusModalOpen, setIsMediaStatusModalOpen] = useState(false); // Renamed
+  const [isMediaStatusModalOpen, setIsMediaStatusModalOpen] = useState(false);
   const [newTextStatus, setNewTextStatus] = useState("");
-  const [statusMediaCaption, setStatusMediaCaption] = useState(""); // Renamed
+  const [statusMediaCaption, setStatusMediaCaption] = useState("");
   const [selectedStatusFile, setSelectedStatusFile] = useState<File | null>(null);
   const [selectedMediaType, setSelectedMediaType] = useState<'image' | 'video' | null>(null);
-  const [statusMediaUrlInput, setStatusMediaUrlInput] = useState(""); // New for URL input
-  const [activeMediaTab, setActiveMediaTab] = useState<'upload' | 'url'>("upload"); // New for tabs
+  const [statusMediaUrlInput, setStatusMediaUrlInput] = useState("");
+  const [activeMediaTab, setActiveMediaTab] = useState<'upload' | 'url'>("upload");
   
   const statusFileInputRef = useRef<HTMLInputElement>(null);
   const [isPostingStatus, setIsPostingStatus] = useState(false);
@@ -81,7 +81,7 @@ export default function StatusPage() {
 
   const refreshStatuses = async () => {
     if(!user) return;
-    setIsLoadingStatus(true); // Show loader during refresh
+    setIsLoadingStatus(true); 
     try {
         const friendsList = await getFriends(user.uid);
         const friendUIDs = friendsList.map(f => f.uid);
@@ -122,9 +122,10 @@ export default function StatusPage() {
       } else if (file.type.startsWith('video/')) {
         setSelectedMediaType('video');
       } else {
-        setSelectedMediaType(null); // Unsupported type
+        setSelectedMediaType(null); 
         toast({title: "Unsupported File", description: "Please select an image or video file.", variant: "destructive"});
-        setSelectedStatusFile(null); // Clear selection
+        setSelectedStatusFile(null); 
+        if(statusFileInputRef.current) statusFileInputRef.current.value = "";
       }
     }
   };
@@ -147,13 +148,12 @@ export default function StatusPage() {
         toast({ title: "Error", description: "Please enter an image URL.", variant: "destructive" });
         return;
       }
-      // Basic URL validation
       if (!statusMediaUrlInput.startsWith('http://') && !statusMediaUrlInput.startsWith('https://')) {
         toast({ title: "Invalid URL", description: "Image URL must start with http:// or https://.", variant: "destructive" });
         return;
       }
       mediaToPost = statusMediaUrlInput.trim();
-      finalMediaType = 'image'; // URL input is for images only
+      finalMediaType = 'image'; 
     }
 
     if (!mediaToPost || !finalMediaType) return;
@@ -163,7 +163,6 @@ export default function StatusPage() {
       await addMediaStatus(user.uid, mediaToPost, finalMediaType, statusMediaCaption);
       toast({ title: "Success", description: "Status posted." });
       setIsMediaStatusModalOpen(false);
-      // Reset states
       setSelectedStatusFile(null);
       setSelectedMediaType(null);
       setStatusMediaUrlInput("");
@@ -180,7 +179,6 @@ export default function StatusPage() {
 
   const openStatusViewer = (group: UserStatusGroup) => {
     if (group.statuses.length === 0) {
-        // If opening my status and it's empty, trigger add media dialog
         if (group.userId === user?.uid) {
             setIsMediaStatusModalOpen(true);
         }
@@ -232,7 +230,6 @@ export default function StatusPage() {
         </div>
       ) : (
         <ScrollArea className="flex-1 -mx-4 sm:-mx-6 lg:-mx-8">
-          {/* My Status */}
           <Card 
             className="mb-2 shadow-none border-0 rounded-none hover:bg-secondary/50 cursor-pointer"
              onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName, userAvatar: user.photoURL, dataAiHint: "person portrait" })}
@@ -264,7 +261,6 @@ export default function StatusPage() {
             </CardContent>
           </Card>
 
-          {/* Recent Updates */}
           {recentUpdates.length > 0 && (
             <div className="py-2">
               <h3 className="px-3 text-sm font-medium text-muted-foreground mb-1">Recent updates</h3>
@@ -299,7 +295,9 @@ export default function StatusPage() {
                 </Button>
             </DialogTrigger>
             <DialogContent>
-                <DialogHeader><DialogTitle>Add Text Status</DialogTitle></DialogHeader>
+                <DialogHeader>
+                    <DialogTitle>Add Text Status</DialogTitle>
+                </DialogHeader>
                 <Textarea 
                     placeholder="What's on your mind?" 
                     value={newTextStatus}
@@ -318,7 +316,7 @@ export default function StatusPage() {
 
         <Dialog open={isMediaStatusModalOpen} onOpenChange={(isOpen) => {
             setIsMediaStatusModalOpen(isOpen);
-            if (!isOpen) { // Reset tab on close
+            if (!isOpen) { 
                  setActiveMediaTab("upload");
                  setSelectedStatusFile(null);
                  setSelectedMediaType(null);
@@ -334,7 +332,9 @@ export default function StatusPage() {
                 </Button>
             </DialogTrigger>
             <DialogContent>
-                <DialogHeader><DialogTitle>Add Media Status</DialogTitle></DialogHeader>
+                <DialogHeader>
+                    <DialogTitle>Add Media Status</DialogTitle>
+                </DialogHeader>
                  <Tabs defaultValue="upload" value={activeMediaTab} onValueChange={(value) => setActiveMediaTab(value as 'upload' | 'url')} className="my-4">
                     <TabsList className="grid w-full grid-cols-2">
                       <TabsTrigger value="upload">Upload Media</TabsTrigger>
@@ -379,7 +379,6 @@ export default function StatusPage() {
         </Dialog>
       </div>
 
-      {/* Status Viewer Modal */}
       {viewingStatus && viewingStatus.statuses.length > 0 && (
         <div 
             className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-0"
@@ -432,7 +431,7 @@ export default function StatusPage() {
                 ) : viewingStatus.statuses[currentStatusIndex].type === 'video' ? (
                      <div className="flex flex-col items-center justify-center max-h-full max-w-full">
                         <video
-                            key={viewingStatus.statuses[currentStatusIndex].id} // Force re-render on src change
+                            key={viewingStatus.statuses[currentStatusIndex].id} 
                             src={viewingStatus.statuses[currentStatusIndex].content}
                             controls
                             autoPlay
@@ -441,14 +440,13 @@ export default function StatusPage() {
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status video"}
                         />
                     </div>
-                ) : ( // text status
+                ) : ( 
                     <div className="bg-primary p-8 rounded-lg text-center max-w-md flex items-center justify-center aspect-square">
                         <p className="text-3xl text-primary-foreground whitespace-pre-wrap">
                             {viewingStatus.statuses[currentStatusIndex].content}
                         </p>
                     </div>
                 )}
-                {/* Caption display for image and video */}
                  {(viewingStatus.statuses[currentStatusIndex].type === 'image' || viewingStatus.statuses[currentStatusIndex].type === 'video') && viewingStatus.statuses[currentStatusIndex].caption && (
                     <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
                         {viewingStatus.statuses[currentStatusIndex].caption}
@@ -464,9 +462,9 @@ export default function StatusPage() {
             )}
         </div>
       )}
-
     </div>
   );
 }
+    
 
     
