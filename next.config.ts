@@ -1,3 +1,4 @@
+
 import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
@@ -16,6 +17,18 @@ const nextConfig: NextConfig = {
         port: '',
         pathname: '/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'firebasestorage.googleapis.com', // For Firebase Storage images
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'i.pinimg.com', // Added for Pinterest images
+        port: '',
+        pathname: '/**',
+      }
     ],
   },
 };
