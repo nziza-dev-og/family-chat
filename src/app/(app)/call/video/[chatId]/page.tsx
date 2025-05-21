@@ -59,12 +59,18 @@ export default function VideoCallPage() {
 
 
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    console.log("Cleaning up video call for chatId:", chatId, "Update Firestore:", updateFirestoreStatus, "CallerInitiatedEnd:", isCallerInitiatedEnd);
+    console.log(`[${chatId}] Cleaning up video call. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${callStatus}`);
+    
+    const currentCallStatus = callStatus; // Capture current status for conditions
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
     }
     if (peerConnectionRef.current) {
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
@@ -87,7 +93,6 @@ export default function VideoCallPage() {
                     if (isCallerInitiatedEnd && callData.callerId === user.uid && callData.status === 'ringing' && chatPartner) {
                         await addMissedCallMessage(chatId, 'video', user.uid, chatPartner.uid);
                     }
-                     // Only update status to ended if it's not already declined or ended by other actions
                     if (callData.status !== 'ended' && callData.status !== 'declined') {
                         await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
                     }
@@ -102,10 +107,10 @@ export default function VideoCallPage() {
             console.warn("Error during call document cleanup:", error);
         }
     }
-    if (callStatus !== "Call Ended") {
+    if (currentCallStatus !== "Call Ended") {
         setCallStatus("Call Ended");
     }
-  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner, callStatus, toast]);
+  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner, toast, router]);
 
 
   useEffect(() => {
@@ -152,85 +157,6 @@ export default function VideoCallPage() {
     fetchChatPartnerDetails();
   }, [chatId, user, router, toast]);
 
-  useEffect(() => {
-    if (authLoading || isLoadingPartner || !user || !chatPartner) {
-        return;
-    }
-
-    if (peerConnectionRef.current) {
-        // console.log("Video call already initialized, skipping re-initialization.");
-        return;
-    }
-
-    if (incomingCall && incomingCall.chatId === chatId) {
-      clearIncomingCall('answered');
-    }
-
-    const initialize = async () => {
-      setCallStatus("Requesting permissions...");
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        localStreamRef.current = stream;
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-        setHasPermission(true);
-        setCallStatus("Initializing connection...");
-
-        peerConnectionRef.current = new RTCPeerConnection(ICE_SERVERS);
-
-        localStreamRef.current.getTracks().forEach(track => {
-          if(localStreamRef.current && peerConnectionRef.current) peerConnectionRef.current.addTrack(track, localStreamRef.current);
-        });
-
-        remoteStreamRef.current = new MediaStream();
-        if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = remoteStreamRef.current;
-        }
-        peerConnectionRef.current.ontrack = event => {
-          event.streams[0].getTracks().forEach(track => {
-            if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
-          });
-          setCallStatus("Connected");
-          if (user) {
-             updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
-          }
-        };
-
-        peerConnectionRef.current.onicecandidate = event => {
-          if (event.candidate && user && chatPartner) {
-            addDoc(iceCandidateCollectionRef, {
-              candidate: event.candidate.toJSON(),
-              senderId: user.uid,
-              recipientId: chatPartner.uid,
-            });
-          }
-        };
-        
-        await setupSignaling();
-
-      } catch (error) {
-        console.error("Error accessing media devices:", error);
-        setHasPermission(false);
-        setCallStatus("Permission Denied");
-        toast({
-          variant: "destructive",
-          title: "Media Access Denied",
-          description: "Please enable camera and microphone permissions.",
-          duration: 5000,
-        });
-      }
-    };
-
-    initialize();
-
-    return () => {
-      cleanupCall(true, false); 
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall]);
-
-
   const setupSignaling = useCallback(async () => {
     if (!user || !peerConnectionRef.current || !chatPartner) return;
     const pc = peerConnectionRef.current;
@@ -273,6 +199,7 @@ export default function VideoCallPage() {
             console.error("Error processing offer or creating answer:", e);
             setCallStatus("Connection error");
             toast({title: "Connection Error", description: "Failed to process call offer.", variant: "destructive"});
+            await cleanupCall(true, false);
         }
       }
 
@@ -285,6 +212,7 @@ export default function VideoCallPage() {
                 console.error("Error setting remote description from answer:", e);
                 setCallStatus("Connection error");
                 toast({title: "Connection Error", description: "Failed to process call answer.", variant: "destructive"});
+                await cleanupCall(true, false);
             }
          }
       }
@@ -309,7 +237,7 @@ export default function VideoCallPage() {
     });
 
     const callSnap = await getDoc(callDocRef);
-    if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid)) {
+     if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid && callSnap.data()?.status !== 'ringing')) {
         setCallStatus("Creating offer...");
         try {
             const offer = await pc.createOffer();
@@ -330,6 +258,7 @@ export default function VideoCallPage() {
             console.error("Error creating offer:", e);
             setCallStatus("Failed to start call");
             toast({title: "Call Error", description: "Could not initiate the call.", variant: "destructive"});
+            await cleanupCall(true, false);
         }
     } else if (callSnap.exists() && callSnap.data()?.callerId === user.uid && !callSnap.data()?.answer && callSnap.data()?.status === 'ringing') {
         setCallStatus("Calling partner, waiting for answer..."); 
@@ -337,7 +266,118 @@ export default function VideoCallPage() {
         setCallStatus("Waiting for connection setup...");
     }
 
-  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall, callStatus]);
+  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall]);
+
+  // Main effect for initializing the call
+  useEffect(() => {
+    if (authLoading || isLoadingPartner || !user || !chatPartner) {
+        return;
+    }
+    if (peerConnectionRef.current || callStatus === "Call Ended") {
+        console.log(`[${chatId}] Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, Status: ${callStatus}`);
+        return;
+    }
+
+    if (incomingCall && incomingCall.chatId === chatId) {
+      clearIncomingCall('answered');
+    }
+
+    const initialize = async () => {
+      setCallStatus("Requesting permissions...");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localStreamRef.current = stream;
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+        setHasPermission(true);
+        setCallStatus("Initializing connection...");
+
+        const pc = new RTCPeerConnection(ICE_SERVERS);
+        peerConnectionRef.current = pc;
+
+        pc.onconnectionstatechange = () => {
+          const currentPCState = pc.connectionState;
+          setCallStatus(prevStatus => {
+            console.log(`[${chatId}] Peer connection state: ${currentPCState}. Current displayed status: ${prevStatus}`);
+            let newStatus = prevStatus;
+            if (currentPCState === 'connected') {
+              newStatus = "Connected";
+              if (user) {
+                 updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
+              }
+            } else if (currentPCState === 'disconnected') {
+              newStatus = "Reconnecting...";
+            } else if (currentPCState === 'failed' || currentPCState === 'closed') {
+              console.log(`[${chatId}] Connection failed or closed. Cleaning up.`);
+              cleanupCall(true, false); 
+              newStatus = prevStatus === "Call Ended" ? prevStatus : "Call Failed";
+            }
+            return newStatus;
+          });
+        };
+
+        localStreamRef.current.getTracks().forEach(track => {
+          if(localStreamRef.current && peerConnectionRef.current) peerConnectionRef.current.addTrack(track, localStreamRef.current);
+        });
+
+        remoteStreamRef.current = new MediaStream();
+        if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        }
+        pc.ontrack = event => {
+          event.streams[0].getTracks().forEach(track => {
+            if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
+          });
+          // Set status to connected usually handled by onconnectionstatechange, but can be set here as a fallback
+          if (callStatus !== "Connected" && callStatus !== "Call Ended") {
+            setCallStatus("Connected");
+            if (user) {
+                updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
+            }
+          }
+        };
+
+        pc.onicecandidate = event => {
+          if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+            addDoc(iceCandidateCollectionRef, {
+              candidate: event.candidate.toJSON(),
+              senderId: user.uid,
+              recipientId: chatPartner.uid,
+            });
+          }
+        };
+        
+        await setupSignaling();
+
+      } catch (error) {
+        console.error("Error accessing media devices:", error);
+        setHasPermission(false);
+        setCallStatus("Permission Denied");
+        toast({
+          variant: "destructive",
+          title: "Media Access Denied",
+          description: "Please enable camera and microphone permissions.",
+          duration: 5000,
+        });
+        await cleanupCall(true, false); // Ensure cleanup if permissions fail
+      }
+    };
+
+    initialize();
+
+    return () => {
+      console.log(`[${chatId}] Unmounting VideoCallPage. Visibility: ${document.visibilityState}`);
+      if (document.visibilityState === 'hidden') {
+        console.log(`[${chatId}] Call page hidden, cleaning up local resources only.`);
+        cleanupCall(false, false); 
+      } else {
+        console.log(`[${chatId}] Call page unmounting/closing, full cleanup.`);
+        cleanupCall(true, false);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall, cleanupCall, setupSignaling]);
 
 
   const toggleMic = () => {
@@ -431,8 +471,11 @@ export default function VideoCallPage() {
       
         <div className="w-full h-1/2 md:h-full md:flex-1 bg-black rounded-lg flex items-center justify-center border border-gray-700 shadow-lg overflow-hidden">
           <video ref={remoteVideoRef} className="w-full h-full object-cover rounded-lg" autoPlay playsInline data-ai-hint="video call remote" />
-          {callStatus !== "Connected" && !remoteStreamRef.current?.active && (
+          {callStatus !== "Connected" && callStatus !== "Reconnecting..." && !remoteStreamRef.current?.active && (
              <p className="text-muted-foreground absolute">{chatPartner ? `Connecting to ${chatPartner.name}...` : 'Connecting...'}</p>
+          )}
+          {callStatus === "Reconnecting..." && (
+            <p className="text-yellow-400 absolute animate-pulse">Reconnecting...</p>
           )}
            {chatPartner && (
             <div className="absolute bottom-2 left-2 bg-black/50 p-1 px-2 rounded text-xs">
@@ -451,13 +494,13 @@ export default function VideoCallPage() {
 
       <footer className="p-4 border-t border-gray-700 bg-gray-800 sticky bottom-0 z-20">
         <div className="flex items-center justify-center space-x-4">
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended"}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed"}>
             {isMicMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
           </Button>
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended" || isCameraOff}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed" || isCameraOff}>
             {isCameraOff ? <VideoOff className="h-6 w-6" /> : <Video className="h-6 w-6" />}
           </Button>
-          <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended"}>
+          <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" || callStatus === "Call Failed"}>
             <PhoneOff className="h-6 w-6" />
           </Button>
         </div>

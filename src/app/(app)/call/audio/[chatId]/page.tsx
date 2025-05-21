@@ -57,12 +57,18 @@ export default function AudioCallPage() {
   const callDocUnsubscribeRef = useRef<(() => void) | null>(null);
 
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    console.log("Cleaning up audio call for chatId:", chatId, "Update Firestore:", updateFirestoreStatus, "CallerInitiatedEnd:", isCallerInitiatedEnd);
+    console.log(`[${chatId}] Cleaning up audio call. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${callStatus}`);
+    
+    const currentCallStatus = callStatus; // Capture current status for conditions
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
     }
     if (peerConnectionRef.current) {
+      peerConnectionRef.current.onicecandidate = null;
+      peerConnectionRef.current.ontrack = null;
+      peerConnectionRef.current.onconnectionstatechange = null;
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
@@ -85,7 +91,6 @@ export default function AudioCallPage() {
                     if (isCallerInitiatedEnd && callData.callerId === user.uid && callData.status === 'ringing' && chatPartner) {
                         await addMissedCallMessage(chatId, 'audio', user.uid, chatPartner.uid);
                     }
-                    // Only update status to ended if it's not already declined or ended by other actions
                     if (callData.status !== 'ended' && callData.status !== 'declined') {
                         await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
                     }
@@ -100,10 +105,10 @@ export default function AudioCallPage() {
             console.warn("Error during call document cleanup:", error);
         }
     }
-    if (callStatus !== "Call Ended") { // Avoid re-setting if already explicitly set
+    if (currentCallStatus !== "Call Ended") { 
       setCallStatus("Call Ended");
     }
-  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner, callStatus, toast]); // Added callStatus, toast to useCallback deps
+  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner, toast, router]); 
 
 
   useEffect(() => {
@@ -150,89 +155,6 @@ export default function AudioCallPage() {
     fetchChatPartnerDetails();
   }, [chatId, user, router, toast]);
 
-  useEffect(() => {
-    if (authLoading || isLoadingPartner || !user || !chatPartner) {
-        return;
-    }
-
-    // Guard against re-initialization if already set up
-    if (peerConnectionRef.current) {
-        // console.log("Audio call already initialized, skipping re-initialization.");
-        return;
-    }
-
-    if (incomingCall && incomingCall.chatId === chatId) {
-      clearIncomingCall('answered');
-    }
-
-    const initialize = async () => {
-      setCallStatus("Requesting permissions...");
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        localStreamRef.current = stream;
-        if (localAudioRef.current) {
-          localAudioRef.current.srcObject = stream; 
-        }
-        setHasPermission(true);
-        setCallStatus("Initializing connection...");
-
-        peerConnectionRef.current = new RTCPeerConnection(ICE_SERVERS);
-
-        localStreamRef.current.getTracks().forEach(track => {
-          if(localStreamRef.current && peerConnectionRef.current) peerConnectionRef.current.addTrack(track, localStreamRef.current);
-        });
-
-        remoteStreamRef.current = new MediaStream();
-        if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = remoteStreamRef.current;
-        }
-        peerConnectionRef.current.ontrack = event => {
-          event.streams[0].getTracks().forEach(track => {
-            if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
-          });
-          if (remoteAudioRef.current) remoteAudioRef.current.play().catch(e => console.error("Error playing remote audio:", e));
-          setCallStatus("Connected");
-          if (user) { // Ensure user is available for update
-            updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
-          }
-        };
-
-        peerConnectionRef.current.onicecandidate = event => {
-          if (event.candidate && user && chatPartner) {
-            addDoc(iceCandidateCollectionRef, {
-              candidate: event.candidate.toJSON(),
-              senderId: user.uid,
-              recipientId: chatPartner.uid,
-            });
-          }
-        };
-        
-        await setupSignaling();
-
-      } catch (error) {
-        console.error("Error accessing microphone:", error);
-        setHasPermission(false);
-        setCallStatus("Permission Denied");
-        toast({
-          variant: "destructive",
-          title: "Microphone Access Denied",
-          description: "Please enable microphone permission in your browser settings.",
-          duration: 5000,
-        });
-      }
-    };
-
-    initialize();
-    
-    return () => {
-      // General cleanup for unmount or critical dependency change.
-      // `isCallerInitiatedEnd` is false here because this cleanup is not tied to the "End Call" button click by a caller of a ringing call.
-      cleanupCall(true, false); 
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall]);
-
-
   const setupSignaling = useCallback(async () => {
     if (!user || !peerConnectionRef.current || !chatPartner) return;
     const pc = peerConnectionRef.current;
@@ -242,7 +164,7 @@ export default function AudioCallPage() {
       if (!data) {
         if (callStatus !== "Call Ended") {
            toast({ title: "Call Ended", description: "The call was terminated." });
-           await cleanupCall(false); // Don't update Firestore if doc is gone
+           await cleanupCall(false); 
            router.back();
         }
         return;
@@ -251,7 +173,7 @@ export default function AudioCallPage() {
       if (data.status === 'declined' || data.status === 'ended') {
         if (callStatus !== "Call Ended") {
             toast({ title: "Call Ended", description: `The call was ${data.status}.` });
-            await cleanupCall(false); // Status already handled, just clean local state
+            await cleanupCall(false); 
             router.back();
         }
         return;
@@ -263,7 +185,7 @@ export default function AudioCallPage() {
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            if (pc.localDescription) { // Ensure localDescription is set
+            if (pc.localDescription) { 
                 await updateDoc(callDocRef, { 
                     answer: pc.localDescription.toJSON(), 
                     status: "answered",
@@ -275,6 +197,7 @@ export default function AudioCallPage() {
             console.error("Error processing offer or creating answer (audio):", e);
             setCallStatus("Connection error");
             toast({title: "Connection Error", description: "Failed to process call offer.", variant: "destructive"});
+            await cleanupCall(true, false);
         }
       }
 
@@ -287,6 +210,7 @@ export default function AudioCallPage() {
                 console.error("Error setting remote description from answer (audio):", e);
                 setCallStatus("Connection error");
                 toast({title: "Connection Error", description: "Failed to process call answer.", variant: "destructive"});
+                await cleanupCall(true, false);
             }
         }
       }
@@ -311,12 +235,12 @@ export default function AudioCallPage() {
     });
 
     const callSnap = await getDoc(callDocRef);
-    if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid)) {
+    if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid && callSnap.data()?.status !== 'ringing')) {
         setCallStatus("Creating offer...");
         try {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            if (pc.localDescription) { // Ensure localDescription is set
+            if (pc.localDescription) { 
                 await setDoc(callDocRef, { 
                     offer: pc.localDescription.toJSON(),
                     callerId: user.uid,
@@ -332,14 +256,127 @@ export default function AudioCallPage() {
             console.error("Error creating offer (audio):", e);
             setCallStatus("Failed to start call");
             toast({title: "Call Error", description: "Could not initiate the call.", variant: "destructive"});
+            await cleanupCall(true, false);
         }
     } else if (callSnap.exists() && callSnap.data()?.callerId === user.uid && !callSnap.data()?.answer && callSnap.data()?.status === 'ringing') {
         setCallStatus("Calling partner, waiting for answer...");
     } else if (callSnap.exists() && callSnap.data()?.calleeId === user.uid && callSnap.data()?.status === 'ringing' && !callSnap.data()?.answer) {
-        // Offer should be in callSnap.data().offer and will be handled by onSnapshot
         setCallStatus("Waiting for connection setup...");
     }
-  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall, callStatus]);
+  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall]);
+
+  // Main effect for initializing the call
+  useEffect(() => {
+    if (authLoading || isLoadingPartner || !user || !chatPartner) {
+        return;
+    }
+    if (peerConnectionRef.current || callStatus === "Call Ended") {
+        console.log(`[${chatId}] Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, Status: ${callStatus}`);
+        return;
+    }
+
+    if (incomingCall && incomingCall.chatId === chatId) {
+      clearIncomingCall('answered');
+    }
+
+    const initialize = async () => {
+      setCallStatus("Requesting permissions...");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        localStreamRef.current = stream;
+        if (localAudioRef.current) {
+          localAudioRef.current.srcObject = stream; 
+        }
+        setHasPermission(true);
+        setCallStatus("Initializing connection...");
+
+        const pc = new RTCPeerConnection(ICE_SERVERS);
+        peerConnectionRef.current = pc;
+
+        pc.onconnectionstatechange = () => {
+          const currentPCState = pc.connectionState;
+          setCallStatus(prevStatus => {
+            console.log(`[${chatId}] Peer connection state: ${currentPCState}. Current displayed status: ${prevStatus}`);
+            let newStatus = prevStatus;
+            if (currentPCState === 'connected') {
+              newStatus = "Connected";
+              if (user) {
+                 updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
+              }
+            } else if (currentPCState === 'disconnected') {
+              newStatus = "Reconnecting...";
+            } else if (currentPCState === 'failed' || currentPCState === 'closed') {
+              console.log(`[${chatId}] Connection failed or closed. Cleaning up.`);
+              cleanupCall(true, false); 
+              newStatus = prevStatus === "Call Ended" ? prevStatus : "Call Failed";
+            }
+            return newStatus;
+          });
+        };
+        
+        localStreamRef.current.getTracks().forEach(track => {
+          if(localStreamRef.current && peerConnectionRef.current) peerConnectionRef.current.addTrack(track, localStreamRef.current);
+        });
+
+        remoteStreamRef.current = new MediaStream();
+        if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = remoteStreamRef.current;
+        }
+        pc.ontrack = event => {
+          event.streams[0].getTracks().forEach(track => {
+            if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
+          });
+          if (remoteAudioRef.current) remoteAudioRef.current.play().catch(e => console.error("Error playing remote audio:", e));
+          // Set status to connected usually handled by onconnectionstatechange, but can be set here as a fallback
+          if (callStatus !== "Connected" && callStatus !== "Call Ended") {
+             setCallStatus("Connected");
+             if (user) {
+                updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
+             }
+          }
+        };
+
+        pc.onicecandidate = event => {
+          if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+            addDoc(iceCandidateCollectionRef, {
+              candidate: event.candidate.toJSON(),
+              senderId: user.uid,
+              recipientId: chatPartner.uid,
+            });
+          }
+        };
+        
+        await setupSignaling();
+
+      } catch (error) {
+        console.error("Error accessing microphone:", error);
+        setHasPermission(false);
+        setCallStatus("Permission Denied");
+        toast({
+          variant: "destructive",
+          title: "Microphone Access Denied",
+          description: "Please enable microphone permission in your browser settings.",
+          duration: 5000,
+        });
+        await cleanupCall(true, false); // Ensure cleanup if permissions fail
+      }
+    };
+
+    initialize();
+    
+    return () => {
+      console.log(`[${chatId}] Unmounting AudioCallPage. Visibility: ${document.visibilityState}`);
+      if (document.visibilityState === 'hidden') {
+        console.log(`[${chatId}] Call page hidden, cleaning up local resources only.`);
+        cleanupCall(false, false); 
+      } else {
+        console.log(`[${chatId}] Call page unmounting/closing, full cleanup.`);
+        cleanupCall(true, false);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall, cleanupCall, setupSignaling]);
+
 
   const toggleMic = () => {
     if (localStreamRef.current) {
@@ -353,7 +390,7 @@ export default function AudioCallPage() {
 
   const handleEndCall = async () => {
     let isCallerEndingRingingCall = false;
-    if (user && chatPartner && peerConnectionRef.current) { // Check peerConnection to ensure call was initiated
+    if (user && chatPartner && peerConnectionRef.current) { 
       const callSnap = await getDoc(callDocRef);
       if (callSnap.exists()) {
         const callData = callSnap.data();
@@ -363,7 +400,7 @@ export default function AudioCallPage() {
       }
     }
     await cleanupCall(true, isCallerEndingRingingCall);
-    if (callStatus !== "Call Ended") { // Avoid double toast if cleanupCall already set it
+    if (callStatus !== "Call Ended") { 
         toast({ title: "Call Ended" });
     }
     router.back();
@@ -421,17 +458,20 @@ export default function AudioCallPage() {
         <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
         <p className="text-lg">Audio call with {chatPartner.name}</p>
-         {callStatus !== "Connected" && callStatus !== "Call Ended" && (
+         {callStatus !== "Connected" && callStatus !== "Call Ended" && callStatus !== "Reconnecting..." && (
            <p className="text-sm text-gray-400">{callStatus === "Initializing..." || callStatus === "Requesting permissions..." || callStatus === "Initializing connection..." ? "Setting up..." : "Attempting to connect..."}</p>
+        )}
+        {callStatus === "Reconnecting..." && (
+            <p className="text-sm text-yellow-400 animate-pulse">Reconnecting...</p>
         )}
       </div>
 
       <footer className="p-6 border-t border-gray-700 bg-gray-700 sticky bottom-0 z-10">
         <div className="flex items-center justify-center space-x-6">
-          <Button variant="outline" size="lg" className="rounded-full p-4 bg-gray-600 border-gray-500 text-white hover:bg-gray-500" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended"}>
+          <Button variant="outline" size="lg" className="rounded-full p-4 bg-gray-600 border-gray-500 text-white hover:bg-gray-500" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed"}>
             {isMicMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
           </Button>
-          <Button variant="destructive" size="lg" className="rounded-full p-4 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended"}>
+          <Button variant="destructive" size="lg" className="rounded-full p-4 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" || callStatus === "Call Failed"}>
             <PhoneOff className="h-7 w-7" />
           </Button>
         </div>
