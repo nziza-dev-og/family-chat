@@ -133,7 +133,7 @@ export function AppSidebar() {
             <UserNav />
           </div>
         )}
-        { state, open -> state is expanded; state, !open -> state is collapsed
+        {
           !isMobile && useSidebar().state === 'collapsed' && user && (
             <Tooltip>
               <TooltipTrigger asChild>
