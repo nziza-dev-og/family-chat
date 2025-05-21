@@ -9,7 +9,7 @@ import Image from "next/image";
 import { useEffect, useState, useRef, type ChangeEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -152,8 +152,20 @@ export default function StatusPage() {
         toast({ title: "Invalid URL", description: "Image URL must start with http:// or https://.", variant: "destructive" });
         return;
       }
+      // For URL, assume it's an image unless we add more complex URL type detection
+      if (statusMediaUrlInput.match(/\.(jpeg|jpg|gif|png)$/) != null) {
+         finalMediaType = 'image'; 
+      } else if (statusMediaUrlInput.match(/\.(mp4|webm|ogg)$/) != null) {
+         // Basic video URL detection - might not be robust enough for all cases
+         // For now, the lib/statusActions only supports string URLs for images
+         // To support video URLs, statusActions.addMediaStatus would need adjustment
+         toast({ title: "Video URL Not Supported Yet", description: "Currently, only image URLs are supported for direct input. Please upload video files.", variant: "destructive" });
+         return;
+      } else {
+         toast({ title: "Unsupported URL", description: "Please provide a direct URL to an image (e.g., .png, .jpg).", variant: "destructive" });
+         return;
+      }
       mediaToPost = statusMediaUrlInput.trim();
-      finalMediaType = 'image'; 
     }
 
     if (!mediaToPost || !finalMediaType) return;
@@ -180,8 +192,10 @@ export default function StatusPage() {
   const openStatusViewer = (group: UserStatusGroup) => {
     if (group.statuses.length === 0) {
         if (group.userId === user?.uid) {
+            // If user has no statuses, directly open add media dialog
             setIsMediaStatusModalOpen(true);
         }
+        // If other user has no status, do nothing or show a message
         return;
     }
     setViewingStatus(group);
@@ -232,7 +246,7 @@ export default function StatusPage() {
         <ScrollArea className="flex-1 -mx-4 sm:-mx-6 lg:-mx-8">
           <Card 
             className="mb-2 shadow-none border-0 rounded-none hover:bg-secondary/50 cursor-pointer"
-             onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName, userAvatar: user.photoURL, dataAiHint: "person portrait" })}
+             onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName || "Me", userAvatar: user.photoURL, dataAiHint: "person portrait" })}
           >
             <CardContent className="p-3 flex items-center space-x-3">
               <div className="relative">
@@ -297,6 +311,7 @@ export default function StatusPage() {
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Add Text Status</DialogTitle>
+                    <DialogDescription>Write something to share with your friends.</DialogDescription>
                 </DialogHeader>
                 <Textarea 
                     placeholder="What's on your mind?" 
@@ -334,6 +349,7 @@ export default function StatusPage() {
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Add Media Status</DialogTitle>
+                    <DialogDescription>Share a photo or video with your friends.</DialogDescription>
                 </DialogHeader>
                  <Tabs defaultValue="upload" value={activeMediaTab} onValueChange={(value) => setActiveMediaTab(value as 'upload' | 'url')} className="my-4">
                     <TabsList className="grid w-full grid-cols-2">
@@ -382,14 +398,16 @@ export default function StatusPage() {
       {viewingStatus && viewingStatus.statuses.length > 0 && (
         <div 
             className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-0"
-            onClick={(e) => { e.stopPropagation(); nextStatus();}}
+            onClick={(e) => { e.stopPropagation(); nextStatus();}} // Click on backdrop advances status
         >
+            {/* Progress bars for multiple statuses */}
             {viewingStatus.statuses.length > 1 && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[95%] max-w-xl flex space-x-1 z-[52] px-2">
                 {viewingStatus.statuses.map((_, idx) => (
                   <div key={idx} className="h-1 flex-1 bg-white/40 rounded-full overflow-hidden">
                     <div 
                       className={`h-full rounded-full ${idx <= currentStatusIndex ? 'bg-white' : ''}`}
+                      // Basic animation for current segment, can be improved with actual progress
                       style={{ width: idx === currentStatusIndex ? '100%' : (idx < currentStatusIndex ? '100%' : '0%') }} 
                     />
                   </div>
@@ -397,10 +415,11 @@ export default function StatusPage() {
               </div>
             )}
 
+            {/* Header: User avatar, name, timestamp, close button */}
             <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-[52]">
                 <div className="flex items-center space-x-2">
                     <Avatar className="h-9 w-9 border border-white/50">
-                        <AvatarImage src={viewingStatus.userAvatar || undefined} />
+                        <AvatarImage src={viewingStatus.userAvatar || undefined} data-ai-hint={viewingStatus.dataAiHint || "person"}/>
                         <AvatarFallback>{viewingStatus.userName?.substring(0,1).toUpperCase()}</AvatarFallback>
                     </Avatar>
                     <div>
@@ -413,6 +432,7 @@ export default function StatusPage() {
                 </Button>
             </div>
             
+            {/* Content: Image, Video, or Text */}
             <div className="relative w-full h-full flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                 {viewingStatus.statuses[currentStatusIndex].type === 'image' ? (
                     <div className="flex flex-col items-center justify-center max-h-full max-w-full">
@@ -420,33 +440,34 @@ export default function StatusPage() {
                             src={viewingStatus.statuses[currentStatusIndex].content} 
                             alt="Status image" 
                             layout="intrinsic" 
-                            width={1080}
+                            width={1080} // Common aspect ratio, adjust as needed
                             height={1920}
                             objectFit="contain"
-                            className="max-h-[calc(100vh-100px)] max-w-full rounded-none md:rounded-lg"
+                            className="max-h-[calc(100vh-100px)] max-w-full rounded-none md:rounded-lg" // Allow full bleed on mobile
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
-                            priority
+                            priority // Prioritize loading the current status image
                         />
                     </div>
                 ) : viewingStatus.statuses[currentStatusIndex].type === 'video' ? (
                      <div className="flex flex-col items-center justify-center max-h-full max-w-full">
                         <video
-                            key={viewingStatus.statuses[currentStatusIndex].id} 
+                            key={viewingStatus.statuses[currentStatusIndex].id} // Key to re-mount video on status change
                             src={viewingStatus.statuses[currentStatusIndex].content}
                             controls
                             autoPlay
-                            playsInline
+                            playsInline // Important for iOS
                             className="max-h-[calc(100vh-100px)] max-w-full md:rounded-lg bg-black"
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status video"}
                         />
                     </div>
-                ) : ( 
+                ) : ( // Text status
                     <div className="bg-primary p-8 rounded-lg text-center max-w-md flex items-center justify-center aspect-square">
                         <p className="text-3xl text-primary-foreground whitespace-pre-wrap">
                             {viewingStatus.statuses[currentStatusIndex].content}
                         </p>
                     </div>
                 )}
+                 {/* Caption for Image/Video */}
                  {(viewingStatus.statuses[currentStatusIndex].type === 'image' || viewingStatus.statuses[currentStatusIndex].type === 'video') && viewingStatus.statuses[currentStatusIndex].caption && (
                     <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
                         {viewingStatus.statuses[currentStatusIndex].caption}
@@ -454,9 +475,12 @@ export default function StatusPage() {
                 )}
             </div>
 
+            {/* Navigation areas for prev/next status */}
             {viewingStatus.statuses.length > 1 && (
                  <>
+                    {/* Left third for previous status */}
                     <div className="absolute left-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); prevStatus(); }}/>
+                    {/* Right third for next status */}
                     <div className="absolute right-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); nextStatus(); }}/>
                  </>
             )}
