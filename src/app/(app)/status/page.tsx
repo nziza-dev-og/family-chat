@@ -4,16 +4,17 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Camera, Edit3, Loader2, Plus, FileImage, AlignLeft, X } from "lucide-react";
+import { Camera, Edit3, Loader2, Plus, FileImage, AlignLeft, X, Link as LinkIcon } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState, useRef, type ChangeEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { addTextStatus, addImageStatus, getStatusesForUserList, type UserStatusGroup, type StatusDisplay, formatStatusTimestamp } from "@/lib/statusActions";
-import { getFriends, type ChatUser } from "@/lib/chatActions"; // To get friend UIDs
+import { addTextStatus, addMediaStatus, getStatusesForUserList, type UserStatusGroup, type StatusDisplay, formatStatusTimestamp } from "@/lib/statusActions";
+import { getFriends, type ChatUser } from "@/lib/chatActions"; 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 
@@ -26,10 +27,14 @@ export default function StatusPage() {
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
 
   const [isTextStatusModalOpen, setIsTextStatusModalOpen] = useState(false);
-  const [isImageStatusModalOpen, setIsImageStatusModalOpen] = useState(false);
+  const [isMediaStatusModalOpen, setIsMediaStatusModalOpen] = useState(false); // Renamed
   const [newTextStatus, setNewTextStatus] = useState("");
-  const [statusImageCaption, setStatusImageCaption] = useState("");
+  const [statusMediaCaption, setStatusMediaCaption] = useState(""); // Renamed
   const [selectedStatusFile, setSelectedStatusFile] = useState<File | null>(null);
+  const [selectedMediaType, setSelectedMediaType] = useState<'image' | 'video' | null>(null);
+  const [statusMediaUrlInput, setStatusMediaUrlInput] = useState(""); // New for URL input
+  const [activeMediaTab, setActiveMediaTab] = useState<'upload' | 'url'>("upload"); // New for tabs
+  
   const statusFileInputRef = useRef<HTMLInputElement>(null);
   const [isPostingStatus, setIsPostingStatus] = useState(false);
 
@@ -56,7 +61,7 @@ export default function StatusPage() {
 
         } catch (error: any) {
           console.error("Failed to fetch statuses:", error);
-          if (error.code === 'failed-precondition' && error.message.includes('index')) {
+          if (error.message?.includes("index") || error.code?.includes("failed-precondition")) {
              toast({ 
               title: "Firestore Index Required", 
               description: "A Firestore index is needed for status queries. Please create it in your Firebase console. The exact index details should be in your browser's console log or the error message.", 
@@ -76,6 +81,7 @@ export default function StatusPage() {
 
   const refreshStatuses = async () => {
     if(!user) return;
+    setIsLoadingStatus(true); // Show loader during refresh
     try {
         const friendsList = await getFriends(user.uid);
         const friendUIDs = friendsList.map(f => f.uid);
@@ -86,6 +92,8 @@ export default function StatusPage() {
     } catch (error: any) {
         console.error("Failed to refresh statuses:", error);
         toast({ title: "Error", description: "Could not refresh statuses.", variant: "destructive" });
+    } finally {
+        setIsLoadingStatus(false);
     }
   }
 
@@ -107,29 +115,77 @@ export default function StatusPage() {
 
   const handleStatusFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
-      setSelectedStatusFile(event.target.files[0]);
+      const file = event.target.files[0];
+      setSelectedStatusFile(file);
+      if (file.type.startsWith('image/')) {
+        setSelectedMediaType('image');
+      } else if (file.type.startsWith('video/')) {
+        setSelectedMediaType('video');
+      } else {
+        setSelectedMediaType(null); // Unsupported type
+        toast({title: "Unsupported File", description: "Please select an image or video file.", variant: "destructive"});
+        setSelectedStatusFile(null); // Clear selection
+      }
     }
   };
 
-  const handlePostImageStatus = async () => {
-    if (!user || !selectedStatusFile) return;
+  const handlePostMediaStatus = async () => {
+    if (!user) return;
+    
+    let mediaToPost: File | string | null = null;
+    let finalMediaType: 'image' | 'video' | null = null;
+
+    if (activeMediaTab === 'upload') {
+      if (!selectedStatusFile || !selectedMediaType) {
+        toast({ title: "Error", description: "Please select an image or video file to upload.", variant: "destructive" });
+        return;
+      }
+      mediaToPost = selectedStatusFile;
+      finalMediaType = selectedMediaType;
+    } else if (activeMediaTab === 'url') {
+      if (!statusMediaUrlInput.trim()) {
+        toast({ title: "Error", description: "Please enter an image URL.", variant: "destructive" });
+        return;
+      }
+      // Basic URL validation
+      if (!statusMediaUrlInput.startsWith('http://') && !statusMediaUrlInput.startsWith('https://')) {
+        toast({ title: "Invalid URL", description: "Image URL must start with http:// or https://.", variant: "destructive" });
+        return;
+      }
+      mediaToPost = statusMediaUrlInput.trim();
+      finalMediaType = 'image'; // URL input is for images only
+    }
+
+    if (!mediaToPost || !finalMediaType) return;
+
     setIsPostingStatus(true);
     try {
-      await addImageStatus(user.uid, selectedStatusFile, statusImageCaption);
+      await addMediaStatus(user.uid, mediaToPost, finalMediaType, statusMediaCaption);
       toast({ title: "Success", description: "Status posted." });
-      setIsImageStatusModalOpen(false);
+      setIsMediaStatusModalOpen(false);
+      // Reset states
       setSelectedStatusFile(null);
-      setStatusImageCaption("");
+      setSelectedMediaType(null);
+      setStatusMediaUrlInput("");
+      setStatusMediaCaption("");
       if(statusFileInputRef.current) statusFileInputRef.current.value = "";
+      setActiveMediaTab("upload");
       await refreshStatuses();
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message || "Failed to post image status.", variant: "destructive" });
+    } catch (error: any)      {
+      toast({ title: "Error", description: error.message || "Failed to post media status.", variant: "destructive" });
     } finally {
       setIsPostingStatus(false);
     }
   };
 
   const openStatusViewer = (group: UserStatusGroup) => {
+    if (group.statuses.length === 0) {
+        // If opening my status and it's empty, trigger add media dialog
+        if (group.userId === user?.uid) {
+            setIsMediaStatusModalOpen(true);
+        }
+        return;
+    }
     setViewingStatus(group);
     setCurrentStatusIndex(0);
   };
@@ -160,6 +216,8 @@ export default function StatusPage() {
     return <div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
 
+  const canPostMedia = activeMediaTab === 'upload' ? !!selectedStatusFile : !!statusMediaUrlInput.trim();
+
   return (
     <div className="flex flex-col h-full">
       <CardHeader className="px-0 py-4">
@@ -177,17 +235,17 @@ export default function StatusPage() {
           {/* My Status */}
           <Card 
             className="mb-2 shadow-none border-0 rounded-none hover:bg-secondary/50 cursor-pointer"
-            onClick={() => myCurrentStatusGroup && openStatusViewer(myCurrentStatusGroup)}
+             onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName, userAvatar: user.photoURL, dataAiHint: "person portrait" })}
           >
             <CardContent className="p-3 flex items-center space-x-3">
               <div className="relative">
-                <Avatar className={`h-12 w-12 ${myCurrentStatusGroup ? 'border-2 border-primary' : ''}`}>
+                <Avatar className={`h-12 w-12 ${myCurrentStatusGroup && myCurrentStatusGroup.statuses.length > 0 ? 'border-2 border-primary' : 'border-2 border-muted'}`}>
                   <AvatarImage src={user.photoURL || undefined} alt="My Status" data-ai-hint="person portrait" />
                   <AvatarFallback>{user.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                 </Avatar>
                 {(!myCurrentStatusGroup || myCurrentStatusGroup.statuses.length === 0) && (
                      <button 
-                        onClick={(e) => { e.stopPropagation(); setIsImageStatusModalOpen(true);}} 
+                        onClick={(e) => { e.stopPropagation(); setIsMediaStatusModalOpen(true);}} 
                         className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center border-2 border-background cursor-pointer hover:bg-primary/80"
                         aria-label="Add status"
                       >
@@ -198,7 +256,9 @@ export default function StatusPage() {
               <div className="flex-1">
                 <p className="font-semibold">My Status</p>
                 <p className="text-sm text-muted-foreground">
-                  {myCurrentStatusGroup ? `${myCurrentStatusGroup.statuses.length} update${myCurrentStatusGroup.statuses.length > 1 ? 's' : ''} \u00B7 ${myCurrentStatusGroup.lastStatusTime}` : "Tap to add status update"}
+                  {myCurrentStatusGroup && myCurrentStatusGroup.statuses.length > 0 ? 
+                    `${myCurrentStatusGroup.statuses.length} update${myCurrentStatusGroup.statuses.length !== 1 ? 's' : ''} \u00B7 ${myCurrentStatusGroup.lastStatusTime}` 
+                    : "Tap to add status update"}
                 </p>
               </div>
             </CardContent>
@@ -256,35 +316,62 @@ export default function StatusPage() {
             </DialogContent>
         </Dialog>
 
-        <Dialog open={isImageStatusModalOpen} onOpenChange={setIsImageStatusModalOpen}>
+        <Dialog open={isMediaStatusModalOpen} onOpenChange={(isOpen) => {
+            setIsMediaStatusModalOpen(isOpen);
+            if (!isOpen) { // Reset tab on close
+                 setActiveMediaTab("upload");
+                 setSelectedStatusFile(null);
+                 setSelectedMediaType(null);
+                 setStatusMediaUrlInput("");
+                 setStatusMediaCaption("");
+                 if(statusFileInputRef.current) statusFileInputRef.current.value = "";
+            }
+        }}>
             <DialogTrigger asChild>
                 <Button size="icon" className="rounded-full h-14 w-14 shadow-lg bg-primary hover:bg-primary/90">
                     <Camera className="h-6 w-6 text-primary-foreground" />
-                    <span className="sr-only">New photo status</span>
+                    <span className="sr-only">New photo or video status</span>
                 </Button>
             </DialogTrigger>
             <DialogContent>
-                <DialogHeader><DialogTitle>Add Image Status</DialogTitle></DialogHeader>
-                <div className="my-4 space-y-4">
-                    <div>
-                      <Label htmlFor="status-image-upload">Choose image</Label>
-                      <Input id="status-image-upload" type="file" accept="image/*" onChange={handleStatusFileChange} ref={statusFileInputRef} />
-                      {selectedStatusFile && <p className="text-sm text-muted-foreground mt-2">Selected: {selectedStatusFile.name}</p>}
-                    </div>
-                    <div>
-                      <Label htmlFor="status-image-caption">Caption (optional)</Label>
-                      <Textarea 
-                        id="status-image-caption"
-                        placeholder="Add a caption..." 
-                        value={statusImageCaption}
-                        onChange={(e) => setStatusImageCaption(e.target.value)}
-                        rows={3}
-                      />
-                    </div>
+                <DialogHeader><DialogTitle>Add Media Status</DialogTitle></DialogHeader>
+                 <Tabs defaultValue="upload" value={activeMediaTab} onValueChange={(value) => setActiveMediaTab(value as 'upload' | 'url')} className="my-4">
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="upload">Upload Media</TabsTrigger>
+                      <TabsTrigger value="url">Image from URL</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="upload" className="py-4 space-y-4">
+                      <div>
+                        <Label htmlFor="status-media-upload">Choose image or video</Label>
+                        <Input id="status-media-upload" type="file" accept="image/*,video/*" onChange={handleStatusFileChange} ref={statusFileInputRef} />
+                        {selectedStatusFile && <p className="text-sm text-muted-foreground mt-2">Selected: {selectedStatusFile.name} ({selectedMediaType})</p>}
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="url" className="py-4 space-y-4">
+                       <div>
+                        <Label htmlFor="status-media-url">Image URL</Label>
+                        <Input 
+                          id="status-media-url" 
+                          placeholder="https://example.com/image.png" 
+                          value={statusMediaUrlInput}
+                          onChange={(e) => setStatusMediaUrlInput(e.target.value)}
+                        />
+                       </div>
+                    </TabsContent>
+                  </Tabs>
+                <div>
+                  <Label htmlFor="status-media-caption">Caption (optional)</Label>
+                  <Textarea 
+                    id="status-media-caption"
+                    placeholder="Add a caption..." 
+                    value={statusMediaCaption}
+                    onChange={(e) => setStatusMediaCaption(e.target.value)}
+                    rows={3}
+                  />
                 </div>
                  <DialogFooter>
-                    <DialogClose asChild><Button variant="outline" onClick={() => {setSelectedStatusFile(null); setStatusImageCaption(""); if(statusFileInputRef.current) statusFileInputRef.current.value = "";}}>Cancel</Button></DialogClose>
-                    <Button onClick={handlePostImageStatus} disabled={isPostingStatus || !selectedStatusFile}>
+                    <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+                    <Button onClick={handlePostMediaStatus} disabled={isPostingStatus || !canPostMedia}>
                         {isPostingStatus && <Loader2 className="mr-2 h-4 w-4 animate-spin"/>} Post
                     </Button>
                 </DialogFooter>
@@ -341,18 +428,31 @@ export default function StatusPage() {
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
                             priority
                         />
-                        {viewingStatus.statuses[currentStatusIndex].caption && (
-                            <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
-                                {viewingStatus.statuses[currentStatusIndex].caption}
-                            </p>
-                        )}
                     </div>
-                ) : ( 
+                ) : viewingStatus.statuses[currentStatusIndex].type === 'video' ? (
+                     <div className="flex flex-col items-center justify-center max-h-full max-w-full">
+                        <video
+                            key={viewingStatus.statuses[currentStatusIndex].id} // Force re-render on src change
+                            src={viewingStatus.statuses[currentStatusIndex].content}
+                            controls
+                            autoPlay
+                            playsInline
+                            className="max-h-[calc(100vh-100px)] max-w-full md:rounded-lg bg-black"
+                            data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status video"}
+                        />
+                    </div>
+                ) : ( // text status
                     <div className="bg-primary p-8 rounded-lg text-center max-w-md flex items-center justify-center aspect-square">
                         <p className="text-3xl text-primary-foreground whitespace-pre-wrap">
                             {viewingStatus.statuses[currentStatusIndex].content}
                         </p>
                     </div>
+                )}
+                {/* Caption display for image and video */}
+                 {(viewingStatus.statuses[currentStatusIndex].type === 'image' || viewingStatus.statuses[currentStatusIndex].type === 'video') && viewingStatus.statuses[currentStatusIndex].caption && (
+                    <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
+                        {viewingStatus.statuses[currentStatusIndex].caption}
+                    </p>
                 )}
             </div>
 

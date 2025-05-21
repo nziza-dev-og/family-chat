@@ -11,8 +11,8 @@ export interface StatusDisplay {
   userId: string;
   userName?: string | null;
   userAvatar?: string | null;
-  type: 'text' | 'image';
-  content: string; // text or imageURL
+  type: 'text' | 'image' | 'video'; // Added 'video'
+  content: string; // text or mediaURL
   caption?: string; // Optional caption for image/video statuses
   createdAt: Timestamp; // Firestore Timestamp
   expiresAt: Timestamp; // Firestore Timestamp
@@ -61,13 +61,27 @@ export async function addTextStatus(userId: string, text: string): Promise<void>
   });
 }
 
-export async function addImageStatus(userId: string, file: File, caption?: string): Promise<void> {
-  if (!userId || !file) throw new Error("User ID and file are required.");
+export async function addMediaStatus(
+  userId: string, 
+  media: File | string, // File for upload, string for direct URL (images only for URL)
+  mediaType: 'image' | 'video', // Explicitly pass media type
+  caption?: string
+): Promise<void> {
+  if (!userId || !media) throw new Error("User ID and media (file or URL) are required.");
 
-  const filePath = `statusImages/${userId}/${Date.now()}_${file.name}`;
-  const storageRef = ref(storage, filePath);
-  await uploadBytes(storageRef, file);
-  const downloadURL = await getDownloadURL(storageRef);
+  let mediaUrl = "";
+
+  if (typeof media === 'string') { // Direct URL provided (for images)
+    if (mediaType !== 'image') {
+        throw new Error("Direct URL input is only supported for image statuses.");
+    }
+    mediaUrl = media;
+  } else { // File object provided for upload
+    const filePath = `statusMedia/${userId}/${mediaType}/${Date.now()}_${media.name}`;
+    const storageRef = ref(storage, filePath);
+    await uploadBytes(storageRef, media);
+    mediaUrl = await getDownloadURL(storageRef);
+  }
 
   const statusesColRef = collection(db, "statuses");
   const expirationDate = new Date();
@@ -79,10 +93,11 @@ export async function addImageStatus(userId: string, file: File, caption?: strin
     userId,
     userName: userData.displayName,
     userAvatar: userData.photoURL,
-    type: 'image',
-    content: downloadURL,
+    type: mediaType,
+    content: mediaUrl,
     createdAt: serverTimestamp(),
     expiresAt: Timestamp.fromDate(expirationDate),
+    dataAiHint: mediaType === 'image' ? 'status image' : 'status video',
   };
 
   if (caption && caption.trim() !== "") {
@@ -101,9 +116,6 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
   
   const userStatusMap: Map<string, UserStatusGroup> = new Map();
 
-  // Firestore 'in' query limit is 30. Chunking for safety.
-  // The query below might require a composite index in Firestore. 
-  // If you see errors related to indexing, please create the index in your Firebase console.
   const chunkSize = 30;
   for (let i = 0; i < currentUserAndFriendUIDs.length; i += chunkSize) {
     const chunk = currentUserAndFriendUIDs.slice(i, i + chunkSize);
@@ -113,8 +125,8 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
         statusesColRef,
         where("userId", "in", chunk),
         where("expiresAt", ">", now),
-        orderBy("userId"), // Group by user first
-        orderBy("createdAt", "desc") // Then by time for each user's statuses
+        orderBy("userId"), 
+        orderBy("createdAt", "desc") 
     );
 
     const statusSnap = await getDocs(q);
@@ -128,10 +140,10 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
             userAvatar: data.userAvatar,
             type: data.type,
             content: data.content,
-            caption: data.caption, // Add caption here
+            caption: data.caption,
             createdAt: data.createdAt as Timestamp,
             expiresAt: data.expiresAt as Timestamp,
-            dataAiHint: data.type === 'image' ? 'status image' : undefined,
+            dataAiHint: data.type === 'image' ? 'status image' : (data.type === 'video' ? 'status video' : undefined),
         };
 
         if (!userStatusMap.has(data.userId)) {
@@ -149,7 +161,9 @@ export async function getStatusesForUserList(currentUserAndFriendUIDs: string[])
   
   userStatusMap.forEach(group => {
     if (group.statuses.length > 0) {
-      group.statuses.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
+      // Statuses are already ordered by createdAt desc from the query for each user
+      // No, the query groups by userId, then sorts by createdAt. We need to ensure per-user sorting if not already done.
+      // The query `orderBy("userId"), orderBy("createdAt", "desc")` should suffice.
       group.lastStatusTime = formatStatusTimestamp(group.statuses[0].createdAt.toDate());
     }
   });
@@ -175,17 +189,15 @@ export function formatStatusTimestamp(date: Date): string {
   const statusDateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diffDays = Math.round((today.getTime() - statusDateOnly.getTime()) / (1000 * 60 * 60 * 24));
 
-  if (diffHours < today.getHours() && diffDays === 0) { // Same day, less than `now.getHours()` ago
-    return `${diffHours} hours ago`;
-  }
-  
-  if (diffDays === 0) { // Today
-    return `Today at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  if (diffDays === 0) { // Today, but more than an hour ago if diffHours > 0
+    if (diffHours > 0 && diffHours < now.getHours()) return `${diffHours} hours ago`; // Check against current hour to avoid "23 hours ago" for something posted "today"
+    return `Today, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
   if (diffDays === 1) {
-    return `Yesterday at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    return `Yesterday, ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
   
   // Fallback for older dates, though statuses expire in 24h
   return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
+
