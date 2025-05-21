@@ -40,6 +40,7 @@ export default function StatusPage() {
 
   const [viewingStatus, setViewingStatus] = useState<UserStatusGroup | null>(null);
   const [currentStatusIndex, setCurrentStatusIndex] = useState(0);
+  const statusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
 
   useEffect(() => {
@@ -145,24 +146,20 @@ export default function StatusPage() {
       finalMediaType = selectedMediaType;
     } else if (activeMediaTab === 'url') {
       if (!statusMediaUrlInput.trim()) {
-        toast({ title: "Error", description: "Please enter an image URL.", variant: "destructive" });
+        toast({ title: "Error", description: "Please enter an image or video URL.", variant: "destructive" });
         return;
       }
       if (!statusMediaUrlInput.startsWith('http://') && !statusMediaUrlInput.startsWith('https://')) {
-        toast({ title: "Invalid URL", description: "Image URL must start with http:// or https://.", variant: "destructive" });
+        toast({ title: "Invalid URL", description: "URL must start with http:// or https://.", variant: "destructive" });
         return;
       }
-      // For URL, assume it's an image unless we add more complex URL type detection
-      if (statusMediaUrlInput.match(/\.(jpeg|jpg|gif|png)$/) != null) {
+      // Basic URL type detection
+      if (statusMediaUrlInput.match(/\.(jpeg|jpg|gif|png|webp)$/i) != null) {
          finalMediaType = 'image'; 
-      } else if (statusMediaUrlInput.match(/\.(mp4|webm|ogg)$/) != null) {
-         // Basic video URL detection - might not be robust enough for all cases
-         // For now, the lib/statusActions only supports string URLs for images
-         // To support video URLs, statusActions.addMediaStatus would need adjustment
-         toast({ title: "Video URL Not Supported Yet", description: "Currently, only image URLs are supported for direct input. Please upload video files.", variant: "destructive" });
-         return;
+      } else if (statusMediaUrlInput.match(/\.(mp4|webm|ogg)$/i) != null) {
+         finalMediaType = 'video';
       } else {
-         toast({ title: "Unsupported URL", description: "Please provide a direct URL to an image (e.g., .png, .jpg).", variant: "destructive" });
+         toast({ title: "Unsupported URL", description: "Please provide a direct URL to an image or video (e.g., .png, .jpg, .mp4).", variant: "destructive" });
          return;
       }
       mediaToPost = statusMediaUrlInput.trim();
@@ -192,17 +189,36 @@ export default function StatusPage() {
   const openStatusViewer = (group: UserStatusGroup) => {
     if (group.statuses.length === 0) {
         if (group.userId === user?.uid) {
-            // If user has no statuses, directly open add media dialog
             setIsMediaStatusModalOpen(true);
         }
-        // If other user has no status, do nothing or show a message
         return;
     }
     setViewingStatus(group);
     setCurrentStatusIndex(0);
   };
+  
+  useEffect(() => {
+    if (statusTimeoutRef.current) {
+        clearTimeout(statusTimeoutRef.current);
+    }
+    if (viewingStatus && viewingStatus.statuses.length > 0) {
+        const current = viewingStatus.statuses[currentStatusIndex];
+        const duration = current.type === 'video' ? 15000 : 5000; // Longer for video, shorter for image/text
+        statusTimeoutRef.current = setTimeout(() => {
+            nextStatus();
+        }, duration);
+    }
+    return () => {
+        if (statusTimeoutRef.current) {
+            clearTimeout(statusTimeoutRef.current);
+        }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewingStatus, currentStatusIndex]);
+
 
   const closeStatusViewer = () => {
+    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
     setViewingStatus(null);
   };
 
@@ -354,7 +370,7 @@ export default function StatusPage() {
                  <Tabs defaultValue="upload" value={activeMediaTab} onValueChange={(value) => setActiveMediaTab(value as 'upload' | 'url')} className="my-4">
                     <TabsList className="grid w-full grid-cols-2">
                       <TabsTrigger value="upload">Upload Media</TabsTrigger>
-                      <TabsTrigger value="url">Image from URL</TabsTrigger>
+                      <TabsTrigger value="url">Media from URL</TabsTrigger>
                     </TabsList>
                     <TabsContent value="upload" className="py-4 space-y-4">
                       <div>
@@ -365,10 +381,10 @@ export default function StatusPage() {
                     </TabsContent>
                     <TabsContent value="url" className="py-4 space-y-4">
                        <div>
-                        <Label htmlFor="status-media-url">Image URL</Label>
+                        <Label htmlFor="status-media-url">Image or Video URL</Label>
                         <Input 
                           id="status-media-url" 
-                          placeholder="https://example.com/image.png" 
+                          placeholder="https://example.com/media.png" 
                           value={statusMediaUrlInput}
                           onChange={(e) => setStatusMediaUrlInput(e.target.value)}
                         />
@@ -397,37 +413,49 @@ export default function StatusPage() {
 
       {viewingStatus && viewingStatus.statuses.length > 0 && (
         <div 
-            className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-0"
-            onClick={(e) => { e.stopPropagation(); nextStatus();}} // Click on backdrop advances status
+            className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-0 select-none"
+            onClick={(e) => { e.stopPropagation(); /* Clicking backdrop handled by nav areas */}} 
         >
-            {/* Progress bars for multiple statuses */}
+            {/* Progress bars */}
             {viewingStatus.statuses.length > 1 && (
-              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[95%] max-w-xl flex space-x-1 z-[52] px-2">
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-[95%] max-w-2xl flex space-x-1 z-[52] px-2">
                 {viewingStatus.statuses.map((_, idx) => (
-                  <div key={idx} className="h-1 flex-1 bg-white/40 rounded-full overflow-hidden">
+                  <div key={idx} className="h-1 flex-1 bg-white/30 rounded-full overflow-hidden">
                     <div 
-                      className={`h-full rounded-full ${idx <= currentStatusIndex ? 'bg-white' : ''}`}
-                      // Basic animation for current segment, can be improved with actual progress
-                      style={{ width: idx === currentStatusIndex ? '100%' : (idx < currentStatusIndex ? '100%' : '0%') }} 
+                      className={`h-full rounded-full transition-all duration-200 ease-linear ${idx < currentStatusIndex ? 'bg-white' : (idx === currentStatusIndex ? 'bg-white animate-progress-fill' : 'bg-transparent')}`}
+                      style={{ 
+                        width: idx === currentStatusIndex ? '100%' : (idx < currentStatusIndex ? '100%' : '0%'),
+                        animationName: idx === currentStatusIndex ? 'progressFillAnim' : 'none',
+                        animationDuration: (viewingStatus.statuses[currentStatusIndex]?.type === 'video' ? '15s' : '5s'), // Match timeout
+                        animationTimingFunction: 'linear',
+                        animationFillMode: 'forwards'
+                       }} 
                     />
                   </div>
                 ))}
               </div>
             )}
+            <style jsx global>{`
+              @keyframes progressFillAnim {
+                from { width: 0%; }
+                to { width: 100%; }
+              }
+            `}</style>
+
 
             {/* Header: User avatar, name, timestamp, close button */}
-            <div className="absolute top-4 left-4 right-4 flex items-center justify-between z-[52]">
+            <div className="absolute top-5 left-4 right-4 flex items-center justify-between z-[52]">
                 <div className="flex items-center space-x-2">
                     <Avatar className="h-9 w-9 border border-white/50">
                         <AvatarImage src={viewingStatus.userAvatar || undefined} data-ai-hint={viewingStatus.dataAiHint || "person"}/>
-                        <AvatarFallback>{viewingStatus.userName?.substring(0,1).toUpperCase()}</AvatarFallback>
+                        <AvatarFallback className="bg-gray-700 text-white">{viewingStatus.userName?.substring(0,1).toUpperCase()}</AvatarFallback>
                     </Avatar>
                     <div>
                         <p className="text-white font-semibold text-sm">{viewingStatus.userName}</p>
                         <p className="text-xs text-gray-300">{formatStatusTimestamp(viewingStatus.statuses[currentStatusIndex].createdAt.toDate())}</p>
                     </div>
                 </div>
-                <Button variant="ghost" size="icon" className="text-white hover:bg-white/20" onClick={(e) => { e.stopPropagation(); closeStatusViewer(); }}>
+                <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 rounded-full" onClick={(e) => { e.stopPropagation(); closeStatusViewer(); }}>
                     <X className="h-5 w-5"/>
                 </Button>
             </div>
@@ -440,55 +468,52 @@ export default function StatusPage() {
                             src={viewingStatus.statuses[currentStatusIndex].content} 
                             alt="Status image" 
                             layout="intrinsic" 
-                            width={1080} // Common aspect ratio, adjust as needed
+                            width={1080} 
                             height={1920}
                             objectFit="contain"
-                            className="max-h-[calc(100vh-100px)] max-w-full rounded-none md:rounded-lg" // Allow full bleed on mobile
+                            className="max-h-[calc(100vh-120px)] max-w-full rounded-none md:rounded-lg" 
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
-                            priority // Prioritize loading the current status image
+                            priority 
                         />
                     </div>
                 ) : viewingStatus.statuses[currentStatusIndex].type === 'video' ? (
                      <div className="flex flex-col items-center justify-center max-h-full max-w-full">
                         <video
-                            key={viewingStatus.statuses[currentStatusIndex].id} // Key to re-mount video on status change
+                            key={viewingStatus.statuses[currentStatusIndex].id} 
                             src={viewingStatus.statuses[currentStatusIndex].content}
-                            controls
+                            controls={false} // Using custom nav, remove default controls
                             autoPlay
-                            playsInline // Important for iOS
-                            className="max-h-[calc(100vh-100px)] max-w-full md:rounded-lg bg-black"
+                            playsInline 
+                            className="max-h-[calc(100vh-120px)] max-w-full md:rounded-lg bg-black"
                             data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status video"}
+                            onEnded={nextStatus} // Auto-advance on video end
                         />
                     </div>
-                ) : ( // Text status
-                    <div className="bg-primary p-8 rounded-lg text-center max-w-md flex items-center justify-center aspect-square">
-                        <p className="text-3xl text-primary-foreground whitespace-pre-wrap">
+                ) : ( 
+                    <div className="bg-gradient-to-br from-purple-600 to-blue-500 p-8 rounded-lg text-center max-w-md w-[90vw] h-[70vh] flex items-center justify-center shadow-2xl">
+                        <p className="text-3xl md:text-4xl text-white font-semibold whitespace-pre-wrap break-words">
                             {viewingStatus.statuses[currentStatusIndex].content}
                         </p>
                     </div>
                 )}
                  {/* Caption for Image/Video */}
                  {(viewingStatus.statuses[currentStatusIndex].type === 'image' || viewingStatus.statuses[currentStatusIndex].type === 'video') && viewingStatus.statuses[currentStatusIndex].caption && (
-                    <p className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-black/60 text-white text-sm p-2 rounded-md max-w-[90%] text-center whitespace-pre-wrap">
+                    <p className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/70 text-white text-sm p-2 px-3 rounded-lg max-w-[90%] text-center whitespace-pre-wrap shadow-md">
                         {viewingStatus.statuses[currentStatusIndex].caption}
                     </p>
                 )}
             </div>
 
             {/* Navigation areas for prev/next status */}
-            {viewingStatus.statuses.length > 1 && (
-                 <>
-                    {/* Left third for previous status */}
-                    <div className="absolute left-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); prevStatus(); }}/>
-                    {/* Right third for next status */}
-                    <div className="absolute right-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); nextStatus(); }}/>
-                 </>
-            )}
+            <>
+                {/* Left third for previous status */}
+                <div className="absolute left-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); prevStatus(); }}/>
+                {/* Right third for next status */}
+                <div className="absolute right-0 top-0 h-full w-1/3 cursor-pointer z-[51]" onClick={(e) => { e.stopPropagation(); nextStatus(); }}/>
+            </>
         </div>
       )}
     </div>
   );
 }
-    
-
     

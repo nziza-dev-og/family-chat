@@ -169,14 +169,18 @@ export default function ChatPage() {
           <h2 className="font-semibold">{chatPartner.name}</h2>
           <p className="text-xs text-muted-foreground">{chatPartner.status}</p>
         </div>
-        <div className="flex items-center space-x-2">
-          <Button variant="ghost" size="icon">
-            <Phone className="h-5 w-5" />
-          </Button>
-          <Button variant="ghost" size="icon">
-            <Video className="h-5 w-5" />
-          </Button>
-          <Button variant="ghost" size="icon">
+        <div className="flex items-center space-x-1">
+          <Link href={`/call/audio/${chatId}`} passHref>
+            <Button variant="ghost" size="icon" aria-label="Start audio call">
+              <Phone className="h-5 w-5" />
+            </Button>
+          </Link>
+          <Link href={`/call/video/${chatId}`} passHref>
+            <Button variant="ghost" size="icon" aria-label="Start video call">
+              <Video className="h-5 w-5" />
+            </Button>
+          </Link>
+          <Button variant="ghost" size="icon" aria-label="More options">
             <MoreVertical className="h-5 w-5" />
           </Button>
         </div>

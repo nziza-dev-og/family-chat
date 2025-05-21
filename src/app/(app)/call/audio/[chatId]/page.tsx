@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAuth } from "@/hooks/useAuth";
 
 
 interface ChatPartner {
@@ -24,23 +25,26 @@ export default function AudioCallPage() {
   const params = useParams();
   const router = useRouter();
   const { toast } = useToast();
+  const { user, loading: authLoading } = useAuth();
   const chatId = params.chatId as string;
 
   const [chatPartner, setChatPartner] = useState<ChatPartner | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingPartner, setIsLoadingPartner] = useState(true);
   
-  const localAudioRef = useRef<HTMLAudioElement>(null); // For local audio processing
-  // const remoteAudioRef = useRef<HTMLAudioElement>(null); // Placeholder for remote audio
+  const localAudioRef = useRef<HTMLAudioElement>(null); 
 
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [hasPermission, setHasPermission] = useState(true); // Optimistically true
+  const [hasPermission, setHasPermission] = useState(true); 
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [callStatus, setCallStatus] = useState("Connecting...");
 
 
   useEffect(() => {
-    if (!chatId) return;
-    setIsLoading(true);
+    if (!chatId || !user) {
+        setIsLoadingPartner(false);
+        return;
+    }
+    setIsLoadingPartner(true);
     const fetchChatPartnerDetails = async () => {
       try {
         const chatDocRef = doc(db, "chats", chatId);
@@ -48,9 +52,7 @@ export default function AudioCallPage() {
 
         if (chatDocSnap.exists()) {
           const chatData = chatDocSnap.data();
-           // Assuming 1-on-1 chat for simplicity in this placeholder
-          const currentUserId = router.query.currentUserUid; // Placeholder: This needs to be passed or fetched
-          const partnerId = chatData.participants.find((pId: string) => pId !== currentUserId && pId !== auth.currentUser?.uid); // Adjust logic
+          const partnerId = chatData.participants.find((pId: string) => pId !== user.uid); 
 
           if (partnerId) {
             const userDocRef = doc(db, "users", partnerId);
@@ -66,8 +68,11 @@ export default function AudioCallPage() {
             } else {
                setChatPartner({ uid: "unknown", name: "Chat User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"});
             }
-          } else {
+          } else if (chatData.isGroup) {
              setChatPartner({ uid: chatId, name: chatData.groupName || "Call Partner", avatar: chatData.groupAvatar || "https://placehold.co/100x100.png", dataAiHint: "group people"});
+          } else {
+             // Fallback if partner logic fails for some reason (e.g. chat with self, though UI should prevent this)
+             setChatPartner({ uid: "unknown", name: "Call Partner", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"});
           }
         } else {
           toast({ title: "Error", description: "Chat not found.", variant: "destructive" });
@@ -77,11 +82,11 @@ export default function AudioCallPage() {
         console.error("Error fetching chat partner details:", error);
         toast({ title: "Error", description: "Could not load partner details.", variant: "destructive" });
       } finally {
-        setIsLoading(false);
+        setIsLoadingPartner(false);
       }
     };
     fetchChatPartnerDetails();
-  }, [chatId, router, toast]);
+  }, [chatId, router, toast, user]);
 
 
   useEffect(() => {
@@ -90,10 +95,10 @@ export default function AudioCallPage() {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         setLocalStream(stream);
         if (localAudioRef.current) {
-          localAudioRef.current.srcObject = stream; // Attach for processing, can be muted
+          localAudioRef.current.srcObject = stream; 
         }
         setHasPermission(true);
-        setCallStatus(chatPartner ? `Ringing ${chatPartner.name}...` : "Ringing..."); // Update status
+        setCallStatus(chatPartner ? `Ringing ${chatPartner.name}...` : "Ringing...");
       } catch (error) {
         console.error("Error accessing microphone:", error);
         setHasPermission(false);
@@ -107,19 +112,18 @@ export default function AudioCallPage() {
       }
     };
 
-    if (chatPartner) { // Only attempt to get permissions once chatPartner is loaded
+    if (chatPartner && !isLoadingPartner) { 
         getMediaPermissions();
     }
     
 
     return () => {
-      // Cleanup: stop tracks when component unmounts
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatPartner]); // Re-run if chatPartner changes (though unlikely here)
+  }, [chatPartner, isLoadingPartner]); 
 
   const toggleMic = () => {
     if (localStream) {
@@ -127,6 +131,7 @@ export default function AudioCallPage() {
         track.enabled = !track.enabled;
       });
       setIsMicMuted(prev => !prev);
+      toast({ title: `Microphone ${!isMicMuted ? "Muted" : "Unmuted"}` });
     }
   };
 
@@ -134,10 +139,11 @@ export default function AudioCallPage() {
      if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
+    toast({ title: "Call Ended" });
     router.back();
   };
 
-  if (isLoading || !chatPartner) {
+  if (authLoading || isLoadingPartner || !chatPartner) {
     return (
       <div className="flex flex-col h-screen items-center justify-center bg-gray-800 text-white">
         <Loader2 className="h-12 w-12 animate-spin" />
@@ -157,7 +163,7 @@ export default function AudioCallPage() {
           <h2 className="font-semibold">{chatPartner.name}</h2>
           <p className="text-xs text-green-400">{callStatus}</p>
         </div>
-        <div className="w-10"> {/* Spacer to balance the back button */} </div>
+        <div className="w-10"></div>
       </header>
 
       {/* Main Call Area */}

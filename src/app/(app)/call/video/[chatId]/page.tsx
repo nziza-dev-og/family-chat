@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useAuth } from "@/hooks/useAuth";
 
 interface ChatPartner {
   uid: string;
@@ -24,22 +25,26 @@ export default function VideoCallPage() {
   const params = useParams();
   const router = useRouter();
   const { toast } = useToast();
+  const { user, loading: authLoading } = useAuth();
   const chatId = params.chatId as string;
 
   const [chatPartner, setChatPartner] = useState<ChatPartner | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingPartner, setIsLoadingPartner] = useState(true);
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null); // Placeholder for now
+  const remoteVideoRef = useRef<HTMLVideoElement>(null); 
 
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [hasPermission, setHasPermission] = useState(true); // Optimistically true
+  const [hasPermission, setHasPermission] = useState(true); 
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
 
   useEffect(() => {
-    if (!chatId) return;
-    setIsLoading(true);
+    if (!chatId || !user) {
+        setIsLoadingPartner(false);
+        return;
+    }
+    setIsLoadingPartner(true);
     const fetchChatPartnerDetails = async () => {
       try {
         const chatDocRef = doc(db, "chats", chatId);
@@ -47,9 +52,7 @@ export default function VideoCallPage() {
 
         if (chatDocSnap.exists()) {
           const chatData = chatDocSnap.data();
-          // Assuming 1-on-1 chat for simplicity in this placeholder
-          const currentUserId = router.query.currentUserUid; // Placeholder: This needs to be passed or fetched
-          const partnerId = chatData.participants.find((pId: string) => pId !== currentUserId && pId !== auth.currentUser?.uid); // Adjust logic if currentUserUid is not available
+          const partnerId = chatData.participants.find((pId: string) => pId !== user.uid); 
 
           if (partnerId) {
             const userDocRef = doc(db, "users", partnerId);
@@ -65,9 +68,10 @@ export default function VideoCallPage() {
             } else {
                setChatPartner({ uid: "unknown", name: "Chat User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"});
             }
-          } else {
-             // Fallback for group chat or if partner logic fails
+          } else if (chatData.isGroup) {
              setChatPartner({ uid: chatId, name: chatData.groupName || "Call Partner", avatar: chatData.groupAvatar || "https://placehold.co/100x100.png", dataAiHint: "group people"});
+          } else {
+             setChatPartner({ uid: "unknown", name: "Call Partner", avatar: "https://placehold.co/100x100.png", dataAiHint: "person portrait"});
           }
         } else {
           toast({ title: "Error", description: "Chat not found.", variant: "destructive" });
@@ -77,11 +81,11 @@ export default function VideoCallPage() {
         console.error("Error fetching chat partner details:", error);
         toast({ title: "Error", description: "Could not load partner details.", variant: "destructive" });
       } finally {
-        setIsLoading(false);
+        setIsLoadingPartner(false);
       }
     };
     fetchChatPartnerDetails();
-  }, [chatId, router, toast]);
+  }, [chatId, router, toast, user]);
 
   useEffect(() => {
     const getMediaPermissions = async () => {
@@ -104,16 +108,17 @@ export default function VideoCallPage() {
       }
     };
 
-    getMediaPermissions();
+    if (!isLoadingPartner) { // Only get permissions if partner loading is done (success or fail)
+        getMediaPermissions();
+    }
 
     return () => {
-      // Cleanup: stop tracks when component unmounts
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, [isLoadingPartner]); 
 
   const toggleMic = () => {
     if (localStream) {
@@ -121,6 +126,7 @@ export default function VideoCallPage() {
         track.enabled = !track.enabled;
       });
       setIsMicMuted(prev => !prev);
+      toast({ title: `Microphone ${!isMicMuted ? "Muted" : "Unmuted"}` });
     }
   };
 
@@ -130,6 +136,7 @@ export default function VideoCallPage() {
         track.enabled = !track.enabled;
       });
       setIsCameraOff(prev => !prev);
+      toast({ title: `Camera ${!isCameraOff ? "Off" : "On"}` });
     }
   };
 
@@ -137,10 +144,11 @@ export default function VideoCallPage() {
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
-    router.back(); // Go back to chat page
+    toast({ title: "Call Ended" });
+    router.back(); 
   };
 
-  if (isLoading) {
+  if (authLoading || isLoadingPartner) {
     return (
       <div className="flex flex-col h-screen items-center justify-center bg-gray-900 text-white">
         <Loader2 className="h-12 w-12 animate-spin" />
@@ -183,7 +191,7 @@ export default function VideoCallPage() {
         )}
       
         {/* Remote Video (Placeholder) */}
-        <div className="w-full h-1/2 md:h-full md:flex-1 bg-black rounded-lg flex items-center justify-center border border-gray-700 shadow-lg">
+        <div className="w-full h-1/2 md:h-full md:flex-1 bg-black rounded-lg flex items-center justify-center border border-gray-700 shadow-lg overflow-hidden">
           <video ref={remoteVideoRef} className="w-full h-full object-cover rounded-lg" autoPlay playsInline data-ai-hint="video call remote" />
           {!chatPartner && <p className="text-muted-foreground">Waiting for partner...</p>}
            {chatPartner && (
@@ -205,10 +213,10 @@ export default function VideoCallPage() {
       {/* Call Controls Footer */}
       <footer className="p-4 border-t border-gray-700 bg-gray-800 sticky bottom-0 z-20">
         <div className="flex items-center justify-center space-x-4">
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic} disabled={!hasPermission}>
             {isMicMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
           </Button>
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission}>
             {isCameraOff ? <VideoOff className="h-6 w-6" /> : <Video className="h-6 w-6" />}
           </Button>
           <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall}>
