@@ -3,7 +3,7 @@ import { Logo } from '@/components/icons/Logo';
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-background p-4">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-whatsapp-auth p-4">
       <div className="mb-8">
         <Logo />
       </div>

@@ -105,3 +105,16 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Custom WhatsApp-like background for auth pages */
+.bg-whatsapp-auth {
+  background-color: hsl(80, 30%, 92%); /* Light muted green */
+  /* Subtle diagonal lines pattern for texture */
+  background-image: repeating-linear-gradient(
+    45deg,
+    hsla(0, 0%, 0%, 0.02) 0,      /* Faint dark lines */
+    hsla(0, 0%, 0%, 0.02) 1px,
+    transparent 1px,
+    transparent 15px               /* Spacing of lines */
+  );
+}
