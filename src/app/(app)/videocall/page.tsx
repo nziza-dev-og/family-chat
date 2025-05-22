@@ -4,6 +4,7 @@
 import VideoCall from '@/components/VideoCall';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, Suspense } from 'react';
+import { Loader2 } from 'lucide-react'; // Added import for Loader2
 
 function VideoCallPageContent() {
   const searchParams = useSearchParams();
@@ -22,8 +23,9 @@ function VideoCallPageContent() {
 
 export default function VideoCallPage() {
     return (
-        <Suspense fallback={<div className="flex h-screen w-screen items-center justify-center"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-3">Loading call interface...</p></div>}>
+        <Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-gray-900 text-white"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-3">Loading call interface...</p></div>}>
             <VideoCallPageContent />
         </Suspense>
     )
 }
+
