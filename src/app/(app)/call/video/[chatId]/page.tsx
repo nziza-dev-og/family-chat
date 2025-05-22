@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mic, MicOff, Video, VideoOff, PhoneOff, Loader2, ShieldAlert } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where, Timestamp, serverTimestamp, Unsubscribe } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, serverTimestamp, Unsubscribe, Timestamp } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
 import { useIncomingCall } from "@/contexts/IncomingCallContext";
@@ -177,7 +177,7 @@ export default function VideoCallPage() {
     pc.onconnectionstatechange = async () => {
       if (!peerConnectionRef.current) return;
       const currentState = peerConnectionRef.current.connectionState;
-      console.log(`[${chatId}] VIDEO Connection state change: ${currentState}`);
+      console.log(`[${chatId}] VIDEO Connection state change: ${currentState}, Current CallStatus: ${callStatus}`);
       setCallStatus(prevStatus => {
         let newStatus = prevStatus;
         if (currentState === 'connected') {
@@ -209,14 +209,15 @@ export default function VideoCallPage() {
         return;
     }
     const pc = peerConnectionRef.current;
+    const currentCallStatus = callStatus; // Read current callStatus
 
     roomUnsubscribeRef.current = onSnapshot(roomDocRef, async (snapshot) => {
       const roomData = snapshot.data();
       
       if (!roomData || roomData.status === 'declined' || roomData.status === 'ended') {
-        const isEstablishing = callStatus === "Creating offer..." || 
-                               callStatus === "Calling partner, waiting for answer..." || 
-                               callStatus === "Initializing connection...";
+        const isEstablishing = currentCallStatus === "Creating offer..." || 
+                               currentCallStatus === "Calling partner, waiting for answer..." || 
+                               currentCallStatus === "Initializing connection...";
         
         const isSelfCallerTryingToEstablish = 
           user && (
@@ -225,8 +226,8 @@ export default function VideoCallPage() {
           );
 
         if (isSelfCallerTryingToEstablish) {
-          console.log(`[${chatId}] VIDEO Room snapshot: Room not ready/stale ('${roomData?.status || 'no room'}'), but current user (caller) is establishing. Skipping cleanup from snapshot.`);
-        } else if (callStatus !== "Call Ended" && callStatus !== "Call Failed") {
+          console.log(`[${chatId}] VIDEO Room snapshot: Room not ready/stale ('${roomData?.status || 'no room'}'), but current user (caller) is establishing. Skipping cleanup from snapshot. Current CallStatus: ${currentCallStatus}`);
+        } else if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") {
           toast({ title: "Call Ended", description: `The call was ${roomData ? roomData.status : 'terminated'}.` });
           await cleanupCall(false);
           router.back();
@@ -324,7 +325,6 @@ export default function VideoCallPage() {
         };
     }
 
-    // Caller: Create Offer if room doesn't exist, or is stale, or if this user is not the callee of a ringing call
     if (!initialRoomData || 
         initialRoomData.status === 'ended' || 
         initialRoomData.status === 'declined' ||
@@ -374,7 +374,7 @@ export default function VideoCallPage() {
     } else if (initialRoomData.calleeId === user.uid && initialRoomData.status === 'ringing' && !initialRoomData.answer) {
         setCallStatus("Waiting for connection setup...");
     }
-  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId, callStatus]);
+  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId]);
 
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) {
@@ -430,7 +430,6 @@ export default function VideoCallPage() {
           description: error.message || "Please enable camera and microphone permissions or connect devices.",
           duration: 5000,
         });
-        // cleanupCall might be triggered by PC state change if it was created
       }
     };
 
@@ -573,7 +572,7 @@ export default function VideoCallPage() {
           <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed" || callStatus === "Permission Denied" || callStatus === "No Camera/Microphone"}>
             {isCameraOff ? <VideoOff className="h-6 w-6" /> : <Video className="h-6 w-6" />}
           </Button>
-          <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" && callStatus === "Call Failed"}>
+          <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={(callStatus === "Call Ended" || callStatus === "Call Failed")}>
             <PhoneOff className="h-6 w-6" />
           </Button>
         </div>
@@ -581,6 +580,3 @@ export default function VideoCallPage() {
     </div>
   );
 }
-
-
-    

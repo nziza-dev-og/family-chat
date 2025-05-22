@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mic, MicOff, PhoneOff, Loader2, ShieldAlert } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where, Timestamp, serverTimestamp, Unsubscribe } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, serverTimestamp, Unsubscribe, Timestamp } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
 import { useIncomingCall } from "@/contexts/IncomingCallContext";
@@ -172,9 +172,9 @@ export default function AudioCallPage() {
       console.log(`[${chatId}] AUDIO ICE gathering state changed: ${pc?.iceGatheringState}`);
     };
     pc.onconnectionstatechange = async () => {
-      if (!peerConnectionRef.current) return; // Guard against race condition if PC is cleaned up
+      if (!peerConnectionRef.current) return; 
       const currentState = peerConnectionRef.current.connectionState;
-      console.log(`[${chatId}] AUDIO Connection state change: ${currentState}`);
+      console.log(`[${chatId}] AUDIO Connection state change: ${currentState}, Current CallStatus: ${callStatus}`);
        setCallStatus(prevStatus => {
         let newStatus = prevStatus;
         if (currentState === 'connected') {
@@ -189,7 +189,6 @@ export default function AudioCallPage() {
           cleanupCall(true, false);
         } else if (currentState === 'closed') {
           newStatus = "Call Ended";
-          // cleanupCall might already be in progress or called by explicit end call
         }
         return newStatus;
       });
@@ -210,26 +209,24 @@ export default function AudioCallPage() {
 
     roomUnsubscribeRef.current = onSnapshot(roomDocRef, async (snapshot) => {
       const roomData = snapshot.data();
+      const currentCallStatus = callStatus; // Read current callStatus
 
-      // If room doesn't exist or is already ended/declined by other means
       if (!roomData || roomData.status === 'declined' || roomData.status === 'ended') {
-        // Check if current user is actively trying to establish (e.g., creating offer)
-        // to prevent premature cleanup by this listener.
-        const isEstablishing = callStatus === "Creating offer..." || 
-                               callStatus === "Calling partner, waiting for answer..." || 
-                               callStatus === "Initializing connection...";
+        const isEstablishing = currentCallStatus === "Creating offer..." || 
+                               currentCallStatus === "Calling partner, waiting for answer..." || 
+                               currentCallStatus === "Initializing connection...";
         
-        // If current user is the caller and is establishing, and roomData reflects an old declined/ended state or no room.
-        const isCallerEstablishingOverStaleRoom = 
-            user && roomData && roomData.callerId === user.uid && isEstablishing && (roomData.status === 'declined' || roomData.status === 'ended');
-        const isCallerEstablishingNewRoom = 
-            user && !roomData && isEstablishing;
+        const isSelfCallerTryingToEstablish = 
+            user && (
+                (!roomData && isEstablishing) || 
+                (roomData && roomData.callerId === user.uid && isEstablishing && (roomData.status === 'declined' || roomData.status === 'ended'))
+            );
 
-        if (isCallerEstablishingOverStaleRoom || isCallerEstablishingNewRoom) {
-          console.log(`[${chatId}] AUDIO Room snapshot: Room not ready/stale ('${roomData?.status || 'no room'}'), but current user (caller) is establishing. Skipping cleanup from snapshot.`);
-        } else if (callStatus !== "Call Ended" && callStatus !== "Call Failed") {
+        if (isSelfCallerTryingToEstablish) {
+          console.log(`[${chatId}] AUDIO Room snapshot: Room not ready/stale ('${roomData?.status || 'no room'}'), but current user (caller) is establishing. Skipping cleanup from snapshot. Current CallStatus: ${currentCallStatus}`);
+        } else if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") {
           toast({ title: "Call Ended", description: `The call was ${roomData ? roomData.status : 'terminated'}.` });
-          await cleanupCall(false); // Local cleanup only
+          await cleanupCall(false); 
           router.back();
         }
         return;
@@ -327,12 +324,11 @@ export default function AudioCallPage() {
         };
     }
 
-    // Caller: Create Offer if room doesn't exist, or is stale, or if this user is not the callee of a ringing call
     if (!initialRoomData || 
         initialRoomData.status === 'ended' || 
         initialRoomData.status === 'declined' ||
-        (initialRoomData.callerId !== user.uid && initialRoomData.calleeId !== user.uid) || // Not part of this call (stale room for someone else)
-        (initialRoomData.calleeId === user.uid && initialRoomData.status !== 'ringing') // Callee but not ringing
+        (initialRoomData.callerId !== user.uid && initialRoomData.calleeId !== user.uid) || 
+        (initialRoomData.calleeId === user.uid && initialRoomData.status !== 'ringing')
        ) {
         setCallStatus("Creating offer...");
         try {
@@ -343,7 +339,6 @@ export default function AudioCallPage() {
             }
             const offer = await pc.createOffer();
             
-            // Guard after await
             if (pc.signalingState === "closed") {
                 console.error(`[${chatId}] AUDIO PC closed after createOffer was called.`);
                 setCallStatus("Call Failed");
@@ -351,7 +346,6 @@ export default function AudioCallPage() {
             }
             await pc.setLocalDescription(offer);
 
-            // Guard after setLocalDescription
             if (!pc.localDescription) {
                 console.error(`[${chatId}] AUDIO localDescription is null after setLocalDescription.`);
                 setCallStatus("Call Failed");
@@ -379,7 +373,7 @@ export default function AudioCallPage() {
     } else if (initialRoomData.calleeId === user.uid && initialRoomData.status === 'ringing' && !initialRoomData.answer) {
         setCallStatus("Waiting for connection setup..."); 
     }
-  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId, callStatus]); 
+  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId]); 
 
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) {
@@ -438,7 +432,6 @@ export default function AudioCallPage() {
           description: error.message || "Please enable microphone permission or connect a microphone.",
           duration: 5000,
         });
-        // No need to call cleanupCall here as PC might not have been created, or if it was, its state change would trigger it.
       }
     };
 
@@ -538,7 +531,7 @@ export default function AudioCallPage() {
         <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
         <p className="text-lg">Audio call with {chatPartner.name}</p>
-         {callStatus !== "Connected" && callStatus !== "Call Ended" && callStatus !== "Reconnecting..." && callStatus !== "Call Failed" && (
+         {callStatus !== "Connected" && callStatus !== "Call Ended" && callStatus !== "Reconnecting..." && callStatus !== "Call Failed" && callStatus !== "Permission Denied" && callStatus !== "No Microphone" && (
            <p className="text-sm text-gray-400">
             {callStatus === "Initializing..." || callStatus === "Requesting permissions..." || callStatus === "Initializing connection..." ? 
             "Setting up..." : 
@@ -558,7 +551,7 @@ export default function AudioCallPage() {
           <Button variant="outline" size="lg" className="rounded-full p-4 bg-gray-600 border-gray-500 text-white hover:bg-gray-500" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed" || callStatus === "Permission Denied" || callStatus === "No Microphone"}>
             {isMicMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
           </Button>
-          <Button variant="destructive" size="lg" className="rounded-full p-4 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" && callStatus === "Call Failed"}>
+          <Button variant="destructive" size="lg" className="rounded-full p-4 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={(callStatus === "Call Ended" || callStatus === "Call Failed")}>
             <PhoneOff className="h-7 w-7" />
           </Button>
         </div>
@@ -566,6 +559,3 @@ export default function AudioCallPage() {
     </div>
   );
 }
-
-
-    
