@@ -4,7 +4,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Paperclip, Send, Smile, ArrowLeft, Phone, Video, MoreVertical, Loader2, GripHorizontal, Info, Search as SearchIcon, Users, Mic } from "lucide-react";
+import { Paperclip, Send, Smile, ArrowLeft, Phone, Video, MoreVertical, Loader2, GripHorizontal, Info, Search as SearchIcon, Users, Mic, X } from "lucide-react"; // Added X
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -23,16 +23,16 @@ interface Message {
   text?: string;
   imageUrl?: string;
   timestamp: Timestamp;
-  type?: 'text' | 'image' | 'event_missed_call' | 'voice'; // Added voice
-  mediaUrl?: string; // For voice or other media
-  mediaDuration?: string; // For voice message duration
+  type?: 'text' | 'image' | 'event_missed_call' | 'voice';
+  mediaUrl?: string; 
+  mediaDuration?: string;
 }
 
 interface ChatPartner {
   uid: string;
   name: string;
   avatar: string;
-  status?: string; // e.g., "23 members, 10 online" for groups
+  status?: string; 
   dataAiHint: string;
   isGroup?: boolean;
 }
@@ -43,7 +43,6 @@ const emojiCategories = {
   "Food & Drink": ["🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️", "🌽", "🥕", "🧄", "🧅", "🥔", "🍠", "🥐", "🥯", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞", "🧇", "🥓", "🥩", "🍗", "🍖", "🦴", "🌭", "🍔", "🍟", "🍕", "🥪", "🥙", "🧆", "🌮", "🌯", "🥗", "🥘", "🥫", "🍝", "🍜", "🍲", "🍛", "🍣", "🍱", "🥟", "🍤", "🍙", "🍚", "🍘", "🍥", "🥠", "🥮", "🍢", "🍡", "🍧", "🍨", "🍦", "🥧", "🧁", "🍰", "🎂", "🍮", "🍭", "🍬", "🍫", "🍿", "🍩", "🍪", "🌰", "🥜", "🍯", "🥛", "🍼", "☕", "🍵", "🧃", "🥤", "🍶", "🍺", "🍻", "🥂", "🍷", "🥃", "🍸", "🍹", "🧉", "🍾", "🧊", "🥄", "🍴", "🍽️", "🥣", "🥡", "🥢", "🧂"],
 };
 
-// Placeholder for Group Info Panel
 const GroupInfoPanel = ({ chatPartner, onClose }: { chatPartner: ChatPartner | null; onClose: () => void }) => {
   if (!chatPartner || !chatPartner.isGroup) return null;
 
@@ -55,7 +54,6 @@ const GroupInfoPanel = ({ chatPartner, onClose }: { chatPartner: ChatPartner | n
           <X className="h-5 w-5" />
         </Button>
       </div>
-      {/* Placeholder content */}
       <p className="text-sm text-group-info-foreground/80">Files, members, and other group settings will appear here.</p>
       <div className="mt-4">
         <h3 className="font-medium text-group-info-foreground mb-2">23 members</h3>
@@ -83,13 +81,13 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "auto" }); // Changed to auto for less jumpiness on new messages
+      messagesEndRef.current.scrollIntoView({ behavior: "auto" });
     }
   }, [messages]);
 
   useEffect(() => {
     if (!user || !chatId) {
-      setIsLoading(false); // Ensure loading state is false if no user/chatId
+      setIsLoading(false); 
       return;
     }
     setIsLoading(true);
@@ -108,7 +106,7 @@ export default function ChatPage() {
                 uid: chatId,
                 name: chatData.groupName || "Group Chat",
                 avatar: chatData.groupAvatar || "https://placehold.co/100x100.png",
-                status: `${chatData.participants.length} members, ${Math.floor(Math.random() * chatData.participants.length)} online`, // Placeholder online count
+                status: `${chatData.participants.length} members, ${Math.floor(Math.random() * chatData.participants.length)} online`, 
                 dataAiHint: "group people",
                 isGroup: true,
               });
@@ -121,14 +119,14 @@ export default function ChatPage() {
                 uid: partnerId,
                 name: partnerData.displayName || "Chat User",
                 avatar: partnerData.photoURL || "https://placehold.co/100x100.png",
-                status: "Online", // Placeholder
+                status: "Online", 
                 dataAiHint: "person portrait",
                 isGroup: false,
               });
             }
           } else {
              toast({title: "Error", description: "Could not determine chat partner.", variant: "destructive"});
-             router.replace("/chats"); // Go back to chat list if partner not found
+             router.replace("/chats"); 
              return;
           }
         } else {
@@ -178,6 +176,7 @@ export default function ChatPage() {
         lastMessageTimestamp: serverTimestamp(),
       });
       setNewMessage("");
+      setIsEmojiPickerOpen(false); // Close emoji picker on send
     } catch (error) {
       console.error("Error sending message:", error);
       toast({title: "Error", description: "Failed to send message.", variant: "destructive"});
@@ -232,11 +231,11 @@ export default function ChatPage() {
     );
   }
 
-  const showBackButton = !params?.chatId || window.innerWidth < 768;
+  const showBackButton = !params?.chatId || (typeof window !== 'undefined' && window.innerWidth < 768);
 
 
   return (
-    <div className="flex-1 flex h-full"> {/* Main container for chat view + group info */}
+    <div className="flex-1 flex h-full">
       <div className="flex-1 flex flex-col bg-card h-full">
         <header className="flex items-center p-3.5 border-b border-border bg-card sticky top-0 z-10 shadow-sm">
           {showBackButton && (
@@ -261,7 +260,7 @@ export default function ChatPage() {
                 <Phone className="h-5 w-5" />
               </Button>
             </Link>
-            <Link href={`/videocall?initialRoomId=${chatId}`} passHref>
+            <Link href={`/videocall`} passHref> {/* Removed initialRoomId query param */}
               <Button variant="ghost" size="icon" aria-label="Start video call" className="text-foreground hover:bg-accent/10">
                 <Video className="h-5 w-5" />
               </Button>
@@ -281,7 +280,7 @@ export default function ChatPage() {
             return (
             <div key={msg.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
               {!isUser && chatPartner.isGroup && (
-                 <Avatar className="h-8 w-8 mr-2 self-end shrink-0 opacity-0"> {/* Invisible spacer for alignment */}
+                 <Avatar className="h-8 w-8 mr-2 self-end shrink-0 opacity-0">
                     <AvatarFallback></AvatarFallback>
                   </Avatar>
               )}
@@ -289,7 +288,7 @@ export default function ChatPage() {
                 {showSenderName && (
                   <span className="text-xs text-muted-foreground mb-0.5 ml-2">{
                     // In a real app, you'd fetch sender's name based on msg.senderId
-                    messages.find(m => m.senderId === msg.senderId)?.text?.split(' ')[0] || "User"
+                    "Other User" // Placeholder
                   }</span>
                 )}
                 {msg.type === 'event_missed_call' ? (
@@ -305,7 +304,7 @@ export default function ChatPage() {
                       isUser
                         ? 'bg-chat-bubble-outgoing-background text-chat-bubble-outgoing-foreground ml-auto'
                         : 'bg-chat-bubble-incoming-background text-chat-bubble-incoming-foreground',
-                      isUser ? 'rounded-br-none' : 'rounded-bl-none' // Speech bubble tail effect
+                      isUser ? 'rounded-br-none' : 'rounded-bl-none'
                     )}
                   >
                     {msg.type === 'image' && msg.imageUrl ? (
@@ -313,10 +312,9 @@ export default function ChatPage() {
                     ) : msg.type === 'voice' && msg.mediaUrl ? (
                        <div className="flex items-center space-x-2 text-foreground/80">
                           <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                            <Mic className="h-4 w-4" /> {/* Placeholder, should be play icon */}
+                            <Mic className="h-4 w-4" />
                           </Button>
                           <div className="w-32 h-1 bg-muted-foreground/30 rounded-full relative">
-                            {/* Placeholder for voice wave & progress */}
                             <div className="absolute left-0 top-0 h-1 bg-primary rounded-full" style={{width: `${Math.random()*80 + 10}%`}}></div>
                           </div>
                           <span className="text-xs">{msg.mediaDuration || "0:15"}</span>
@@ -337,10 +335,7 @@ export default function ChatPage() {
 
         <footer className="p-3 border-t border-border bg-card sticky bottom-0 z-10">
           <div className="flex items-center space-x-2">
-            <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" onClick={handleAttachmentClick}>
-              <Paperclip className="h-5 w-5" />
-            </Button>
-            <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
+             <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
               <PopoverTrigger asChild>
                 <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
                   <Smile className="h-5 w-5" />
@@ -357,7 +352,7 @@ export default function ChatPage() {
                             key={emoji}
                             variant="ghost"
                             className="text-xl p-1 h-auto aspect-square hover:bg-accent/10 rounded-md"
-                            onClick={() => handleEmojiSelect(emoji)}
+                            onClick={() => { handleEmojiSelect(emoji); /* setIsEmojiPickerOpen(false); Consider if auto-close is desired */ }}
                           >
                             {emoji}
                           </Button>
@@ -368,6 +363,9 @@ export default function ChatPage() {
                 </ScrollArea>
               </PopoverContent>
             </Popover>
+             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" onClick={handleGifButtonClick}>
+              <GripHorizontal className="h-5 w-5" /> {/* Placeholder for GIF */}
+            </Button>
             <Input
               placeholder="Your message"
               className="flex-1 rounded-full px-4 py-2.5 bg-muted/50 border-transparent focus:border-primary focus:bg-card focus-visible:ring-primary text-sm h-10"
@@ -375,6 +373,9 @@ export default function ChatPage() {
               onChange={(e) => setNewMessage(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey ? (e.preventDefault(), handleSendMessage()) : null}
             />
+             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" onClick={handleAttachmentClick}>
+              <Paperclip className="h-5 w-5" />
+            </Button>
              {newMessage.trim() ? (
               <Button size="icon" className="rounded-full bg-primary hover:bg-primary/90 text-primary-foreground w-10 h-10 shrink-0" onClick={handleSendMessage}>
                 <Send className="h-5 w-5" />
@@ -393,3 +394,4 @@ export default function ChatPage() {
     </div>
   );
 }
+
