@@ -1,34 +1,26 @@
 
 import type { SVGProps } from 'react';
+import { cn } from '@/lib/utils'; // Import cn
 
+// A simple abstract triangle logo, similar to the example image's top-left logo
 export function Logo(props: SVGProps<SVGSVGElement>) {
-  // Determine fill color based on props or default to primary (CSS variable)
-  const fill = props.fill || 'hsl(var(--primary-foreground))'; // Default to primary-foreground for visibility on primary bg
+  const { className, ...rest } = props;
+  // Default fill to --sidebar-primary-foreground if on dark sidebar, or --primary if on light bg
+  // This is a simplification; true context awareness is harder.
+  // Consumers can override fill directly.
+  const fill = props.fill || 'currentColor'; // Simpler: use CSS to set color via text-color
 
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 200 50"
-      width={props.width || "120"} // Allow overriding width
-      height={props.height || "30"} // Allow overriding height
-      aria-label="FamilyChat Logo"
-      {...props}
-      fill={fill} // Apply the fill color
+      viewBox="0 0 24 24" // Simple square viewBox
+      width={props.width || "28"} 
+      height={props.height || "28"}
+      aria-label="App Logo"
+      className={cn("fill-current", className)} // Allow overriding fill via text color
+      {...rest}
     >
-      {/* Transparent rect for background if needed for interaction, not strictly necessary for text */}
-      {/* <rect width="200" height="50" fill="transparent" />  */}
-      <text
-        x="10" // Adjusted for better alignment if needed
-        y="35" // Adjusted for better vertical centering
-        fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" // System font stack
-        fontSize="30"
-        fontWeight="bold"
-        // fill is now inherited from SVG element or overridden by props.fill
-      >
-        FamilyChat
-      </text>
+      <path d="M12 2L2 22H22L12 2Z" />
     </svg>
   );
 }
-
-    

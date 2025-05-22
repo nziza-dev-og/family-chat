@@ -5,108 +5,100 @@
 
 @layer base {
   :root {
-    /* WhatsApp Light Theme Inspired */
-    --background: 210 20% 98%; /* Very light gray - Main app background */
-    --foreground: 20 15% 25%; /* Dark gray for text */
+    /* Design Chat Theme - Light Mode Dominant */
+    --background: 220 30% 96%; /* Light lavender-grey page background */
+    --foreground: 240 10% 10%; /* Dark grey for text */
 
-    --card: 0 0% 100%; /* White */
-    --card-foreground: 20 15% 25%;
+    --card: 0 0% 100%; /* White for cards, chat list, chat area */
+    --card-foreground: 240 10% 10%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 20 15% 25%;
+    --popover-foreground: 240 10% 10%;
 
-    --primary: 170 65% 40%; /* WhatsApp Green/Teal */
+    --primary: 250 70% 60%; /* Vibrant Purple/Blue for primary actions, notifications */
     --primary-foreground: 0 0% 100%; /* White */
 
-    --secondary: 170 60% 75%; /* Lighter shade of primary */
-    --secondary-foreground: 170 65% 20%; /* Darker shade of primary */
+    --secondary: 220 20% 90%; /* Light grey for secondary elements, borders */
+    --secondary-foreground: 240 10% 25%;
 
-    --muted: 210 20% 92%; /* Light gray for muted elements */
-    --muted-foreground: 20 10% 45%; /* Softer gray for muted text */
+    --muted: 220 20% 94%; /* Muted background, e.g., inactive chat item */
+    --muted-foreground: 240 5% 45%; /* Muted text */
 
-    --accent: 195 85% 45%; /* A distinct blue for accents if needed, e.g., links or some icons */
+    --accent: 250 70% 65%; /* Slightly lighter purple for accents */
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 75% 55%; /* Red for destructive actions */
+    --destructive: 0 75% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 210 15% 88%;
+    --border: 220 15% 88%; /* Default border color */
     --input: 0 0% 100%; /* White input backgrounds */
-    --ring: 170 65% 50%; /* Ring color based on primary */
+    --ring: 250 70% 60%; /* Ring color based on primary */
 
-    --chart-1: 170 65% 40%;
-    --chart-2: 195 85% 45%;
-    --chart-3: 30 90% 55%;
-    --chart-4: 270 70% 60%;
-    --chart-5: 0 0% 60%;
-    --radius: 0.5rem;
-
-    /* Sidebar specific colors (can be same as main for WhatsApp look) */
-    --sidebar-background: 170 70% 30%; /* Darker WhatsApp Green for sidebar */
-    --sidebar-foreground: 0 0% 95%;
-    --sidebar-primary: 0 0% 100%; /* Active item background */
-    --sidebar-primary-foreground: 170 70% 30%; /* Active item text */
-    --sidebar-accent: 170 60% 60%; /* Hover item background */
-    --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 170 70% 25%;
-    --sidebar-ring: 0 0% 100%;
+    /* Sidebar specific colors (Dark Theme) */
+    --sidebar-background: 240 5% 15%; /* Very Dark Grey/Almost Black */
+    --sidebar-foreground: 0 0% 90%; /* Light grey/white text */
+    --sidebar-primary: 250 60% 50%; /* Purple for active sidebar item */
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 5% 25%; /* Slightly lighter dark grey for hover */
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 240 5% 20%;
+    --sidebar-ring: 250 70% 60%;
 
     /* Chat specific colors */
-    --chat-background-pattern-url: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAMAAABHPGVmAAAAA1BMVEXM2uH8ANaPAAAAIElEQVR4nO3BAQEAAACCIP+vbkhAAQAAAAAAAAAAAAAAAAAAAAAA8Gq3hQAFAARz3AAAAABJRU5ErkJggg=="); /* Tiny transparent pixel to ensure property exists */
-    --chat-background-color: 205 40% 92%; /* WhatsApp-like chat background color (light beige/gray) */
-    --chat-bubble-outgoing-background: 170 70% 85%; /* Light green for outgoing messages */
-    --chat-bubble-outgoing-foreground: 20 15% 25%;
-    --chat-bubble-incoming-background: 0 0% 100%; /* White for incoming messages */
-    --chat-bubble-incoming-foreground: 20 15% 25%;
+    --chat-background-color: 0 0% 100%; /* Chat area background - white */
+    --chat-bubble-outgoing-background: 250 70% 60%; /* Purple/Blue for user's messages */
+    --chat-bubble-outgoing-foreground: 0 0% 100%;
+    --chat-bubble-incoming-background: 220 20% 94%; /* Light grey for other's messages */
+    --chat-bubble-incoming-foreground: 240 10% 10%;
+    
+    --group-info-background: 250 60% 97%; /* Very light lavender for Group Info panel */
+    --group-info-foreground: 240 10% 20%;
+
+    --radius: 0.75rem; /* Slightly larger radius for modern look */
   }
 
   .dark {
-    /* WhatsApp Dark Theme Inspired */
-    --background: 220 20% 12%; /* Very dark blue/gray */
-    --foreground: 210 30% 88%;
+    /* Design Chat Theme - Dark Mode (Conceptual - image is light) */
+    --background: 240 5% 10%; 
+    --foreground: 0 0% 90%;
 
-    --card: 220 20% 16%;
-    --card-foreground: 210 30% 88%;
+    --card: 240 5% 15%; 
+    --card-foreground: 0 0% 90%;
 
-    --popover: 220 20% 16%;
-    --popover-foreground: 210 30% 88%;
+    --popover: 240 5% 15%;
+    --popover-foreground: 0 0% 90%;
 
-    --primary: 170 60% 50%; /* Slightly brighter WhatsApp Green for dark mode */
+    --primary: 250 70% 65%; 
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 170 55% 40%;
-    --secondary-foreground: 0 0% 100%;
+    --secondary: 240 5% 25%; 
+    --secondary-foreground: 0 0% 85%;
 
-    --muted: 220 20% 20%;
-    --muted-foreground: 210 30% 65%;
+    --muted: 240 5% 20%;
+    --muted-foreground: 0 0% 65%;
 
-    --accent: 195 75% 55%;
+    --accent: 250 70% 70%;
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 65% 50%;
-    --destructive-foreground: 0 0% 100%;
+    --border: 240 5% 25%;
+    --input: 240 5% 18%;
+    --ring: 250 70% 65%;
 
-    --border: 220 20% 25%;
-    --input: 220 20% 18%;
-    --ring: 170 60% 55%;
-
-    /* Sidebar specific colors for dark mode */
-    --sidebar-background: 220 25% 10%; /* Even darker for dark mode sidebar */
-    --sidebar-foreground: 0 0% 85%;
-    --sidebar-primary: 170 60% 50%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 170 55% 35%;
-    --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 220 25% 15%;
-    --sidebar-ring: 170 60% 50%;
+    /* Sidebar is already dark, minor tweaks if needed */
+    --sidebar-background: 240 5% 12%;
+    --sidebar-foreground: 0 0% 92%;
+    --sidebar-primary: 250 65% 55%;
+    --sidebar-accent: 240 5% 22%;
     
     /* Chat specific colors for dark mode */
-    --chat-background-pattern-url: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAMAAABHPGVmAAAAA1BMVEX///+nxBvLAAAAIElEQVR4nO3BAQEAAACCIP+vbkhAAQAAAAAAAAAAAAAAAAAAAAAA8Gq3hQAFAARz3AAAAABJRU5ErkJggg==");
-    --chat-background-color: 220 20% 10%; /* Darker chat background for dark mode */
-    --chat-bubble-outgoing-background: 170 60% 25%; /* Darker green for outgoing messages */
-    --chat-bubble-outgoing-foreground: 0 0% 90%;
-    --chat-bubble-incoming-background: 220 20% 22%; /* Dark gray for incoming messages */
+    --chat-background-color: 240 5% 15%;
+    --chat-bubble-outgoing-background: 250 60% 50%; 
+    --chat-bubble-outgoing-foreground: 0 0% 95%;
+    --chat-bubble-incoming-background: 240 5% 22%; 
     --chat-bubble-incoming-foreground: 0 0% 90%;
+
+    --group-info-background: 250 15% 20%; 
+    --group-info-foreground: 0 0% 85%;
   }
 }
 
@@ -116,50 +108,11 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Ensure system-like fonts are prioritized */
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    /* Subtle wavy background pattern from image - replace with actual SVG/PNG if available */
+    background-image: url("data:image/svg+xml,%3Csvg width='52' height='26' viewBox='0 0 52 26' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill-rule='evenodd'%3E%3Cg fill='%23d0d0e0' fill-opacity='0.1'%3E%3Cpath d='M10 10c0-2.21-1.79-4-4-4-3.314 0-6-2.686-6-6h2c0 2.21 1.79 4 4 4 3.314 0 6 2.686 6 6 0 2.21 1.79 4 4 4 3.314 0 6 2.686 6 6 0 2.21 1.79 4 4 4v2c-3.314 0-6-2.686-6-6 0-2.21-1.79-4-4-4-3.314 0-6-2.686-6-6zm25.464-1.95l8.486 8.486-1.414 1.414-8.486-8.486 1.414-1.414zM41.95 17.05l8.486 8.486-1.414 1.414-8.486-8.486 1.414-1.414zM6 22c0 2.21-1.79 4-4 4v2c3.314 0 6-2.686 6-6 0-2.21 1.79-4 4-4 3.314 0 6-2.686 6-6 0-2.21 1.79-4 4-4h2c-3.314 0-6 2.686-6 6 0 2.21-1.79 4-4 4-3.314 0-6 2.686-6 6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
   }
-  /* Apply chat background pattern */
   .chat-bg {
     background-color: hsl(var(--chat-background-color));
-    /*
-      To add a WhatsApp-like doodle pattern, you'd typically use a repeating background image (SVG or PNG).
-      Find or create a suitable, freely-licensed doodle pattern.
-      Example:
-      background-image: var(--chat-background-pattern-url); // Ensure this URL points to your pattern
-      background-repeat: repeat;
-      background-size: 300px auto; // Adjust size as needed
-      background-blend-mode: multiply; // Or another blend mode
-    */
   }
 }
-
-/* 
-  Custom WhatsApp-like background for auth pages.
-*/
-.bg-whatsapp-auth {
-  background-color: hsl(80, 40%, 90%); /* Slightly more saturated light muted green */
-  background-image: repeating-linear-gradient(
-    45deg,
-    hsla(80, 20%, 50%, 0.03) 0,      /* Fainter, slightly greener lines */
-    hsla(80, 20%, 50%, 0.03) 1px,
-    transparent 1px,
-    transparent 20px               /* Slightly wider spacing */
-  );
-  /*
-    To add "materials" or doodles like WhatsApp's official background, you would typically use
-    a repeating background image (SVG or PNG) layered here.
-    Example:
-    background-image: 
-      repeating-linear-gradient( ... ), // current lines
-      url('/path/to/your/doodle-pattern.svg'); // your doodle pattern
-    background-size: 
-      auto, // for lines
-      300px 300px; // example size for doodle pattern
-    background-blend-mode: multiply; // or other blend mode
-
-    Ensure any doodle pattern you use is properly licensed.
-  */
-}
-
-    

@@ -1,25 +1,29 @@
 
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Search, UserPlus, Loader2, MessageSquarePlus } from "lucide-react";
+import { PlusCircle, Search, UserPlus, Loader2, MessageSquarePlus, Users, Settings, FolderArchive, MessageSquareText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useRouter, useParams, usePathname } from "next/navigation"; // Added useParams, usePathname
+import { useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 import { getAllUsers, addFriend, getOrCreateChatWithUser, getUserChats, type ChatUser, type ChatListItem } from "@/lib/chatActions";
+import { cn } from "@/lib/utils";
 
-
-export default function ChatListPage() {
+// This component now represents the left panel (Chat List)
+function ChatListPanel() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname(); // to get current full path
+  const params = useParams(); // to get current dynamic route params like chatId
+  const currentChatId = params?.chatId as string | undefined;
   const { toast } = useToast();
 
   const [chats, setChats] = useState<ChatListItem[]>([]);
@@ -28,6 +32,8 @@ export default function ChatListPage() {
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [searchChatTerm, setSearchChatTerm] = useState("");
+
 
   useEffect(() => {
     if (user && !authLoading) {
@@ -53,10 +59,6 @@ export default function ChatListPage() {
     setIsAddUserModalOpen(true);
     try {
       const users = await getAllUsers(user.uid);
-      // Filter out users already in chats (or friends) to simplify - more robust logic can be added
-      // For now, let's assume 'friends' are those in the 'friends' array on the user doc.
-      // We might need to fetch current user's friends list to accurately filter here if desired.
-      // For simplicity, we'll show all users not the current user.
       setAllOtherUsers(users);
     } catch (error) {
       console.error("Failed to fetch users:", error);
@@ -69,14 +71,13 @@ export default function ChatListPage() {
   const handleAddAndChat = async (friend: ChatUser) => {
     if (!user || !friend.uid) return;
     try {
-      // Establish the "friend" relationship for status viewing
-      await addFriend(user.uid, friend.uid); 
-      toast({ title: "Friend Added", description: `${friend.displayName} is now your friend. You can see each other's statuses.` });
+      await addFriend(user.uid, friend.uid);
+      toast({ title: "Friend Added", description: `${friend.displayName} is now your friend.` });
       
-      const chatId = await getOrCreateChatWithUser(user.uid, friend.uid);
+      const newChatId = await getOrCreateChatWithUser(user.uid, friend.uid);
       setIsAddUserModalOpen(false);
-      setSearchTerm(""); // Clear search term
-      router.push(`/chats/${chatId}`);
+      setSearchTerm("");
+      router.push(`/chats/${newChatId}`);
     } catch (error: any) {
       console.error("Failed to add friend or start chat:", error);
       toast({ title: "Error", description: error.message || "Could not start chat.", variant: "destructive" });
@@ -87,9 +88,14 @@ export default function ChatListPage() {
     ? allOtherUsers.filter(u => u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) || u.email?.toLowerCase().includes(searchTerm.toLowerCase()))
     : allOtherUsers;
 
-  if (authLoading || isLoadingChats) {
+  const filteredChats = searchChatTerm
+    ? chats.filter(chat => chat.name?.toLowerCase().includes(searchChatTerm.toLowerCase()))
+    : chats;
+
+
+  if (authLoading) {
     return (
-      <div className="flex flex-col h-full items-center justify-center">
+      <div className="w-full md:w-80 lg:w-96 border-r border-border bg-card p-4 flex flex-col items-center justify-center">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
         <p className="mt-4 text-muted-foreground">Loading chats...</p>
       </div>
@@ -97,28 +103,30 @@ export default function ChatListPage() {
   }
   
   return (
-    <div className="flex flex-col h-full">
-      <CardHeader className="px-0 py-4">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-2xl">Chats</CardTitle>
+    <div className={cn(
+        "w-full md:w-80 lg:w-96 border-r border-border bg-card flex-col h-full overflow-y-auto",
+        currentChatId ? "hidden md:flex" : "flex" // Hide on mobile if a chat is open
+      )}>
+      <div className="p-4 sticky top-0 bg-card z-10 border-b border-border">
+        <div className="flex items-center justify-between mb-4">
+          <h1 className="text-xl font-semibold">All chats</h1>
           <Dialog open={isAddUserModalOpen} onOpenChange={(isOpen) => {
             setIsAddUserModalOpen(isOpen);
-            if (!isOpen) setSearchTerm(""); // Clear search on dialog close
+            if (!isOpen) setSearchTerm(""); 
           }}>
             <DialogTrigger asChild>
               <Button variant="ghost" size="icon" onClick={handleOpenAddUserModal}>
-                <MessageSquarePlus className="h-6 w-6 text-primary" />
-                <span className="sr-only">New Chat</span>
+                <MessageSquarePlus className="h-5 w-5 text-primary" />
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[425px]">
               <DialogHeader>
                 <DialogTitle>Start a new chat</DialogTitle>
-                <DialogDescription>Select a user to start a conversation with. This will also add them as a friend to see their status updates.</DialogDescription>
+                <DialogDescription>Select a user to start a conversation with.</DialogDescription>
               </DialogHeader>
               <div className="py-2">
                 <Input 
-                  placeholder="Search users by name or email..." 
+                  placeholder="Search users..." 
                   value={searchTerm} 
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="mb-4"
@@ -140,11 +148,11 @@ export default function ChatListPage() {
                           <AvatarFallback>{u.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-semibold">{u.displayName}</p>
+                          <p className="font-medium text-sm">{u.displayName}</p>
                           <p className="text-xs text-muted-foreground">{u.email}</p>
                         </div>
                       </div>
-                    )) : <p className="text-center text-muted-foreground">No users found matching your search.</p>}
+                    )) : <p className="text-center text-muted-foreground">No users found.</p>}
                   </ScrollArea>
                 )}
               </div>
@@ -154,14 +162,29 @@ export default function ChatListPage() {
             </DialogContent>
           </Dialog>
         </div>
-      </CardHeader>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input 
+            placeholder="Search chats..." 
+            className="pl-10"
+            value={searchChatTerm}
+            onChange={(e) => setSearchChatTerm(e.target.value)}
+          />
+        </div>
+      </div>
       
-      <div className="flex-1 overflow-y-auto -mx-4 sm:-mx-6 lg:-mx-8">
-        {chats.length > 0 ? chats.map((chat) => (
-          <Link href={`/chats/${chat.id}`} key={chat.id} passHref>
-            <Card className="mb-0 shadow-none border-0 border-b rounded-none hover:bg-secondary/50 cursor-pointer">
-              <CardContent className="p-3 flex items-center space-x-3">
-                <Avatar className="h-12 w-12"> {/* Ensured Avatar size consistency */}
+      <ScrollArea className="flex-1">
+        <div className="divide-y divide-border">
+          {isLoadingChats ? (
+            <div className="p-4 text-center text-muted-foreground">Loading...</div>
+          ) : filteredChats.length > 0 ? filteredChats.map((chat) => (
+            <Link href={`/chats/${chat.id}`} key={chat.id} passHref
+                  className={cn(
+                    "block hover:bg-muted/50",
+                    currentChatId === chat.id && "bg-muted"
+                  )}>
+              <div className="p-3 flex items-center space-x-3 cursor-pointer">
+                <Avatar className="h-10 w-10">
                   <AvatarImage 
                     src={chat.avatar || "https://placehold.co/100x100.png"} 
                     alt={chat.name || "Chat"}
@@ -171,29 +194,53 @@ export default function ChatListPage() {
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center">
-                    <p className="font-semibold truncate">{chat.name}</p>
-                    <p className="text-xs text-muted-foreground">{chat.time}</p>
+                    <p className="font-medium text-sm truncate">{chat.name}</p>
+                    <p className="text-xs text-muted-foreground whitespace-nowrap">{chat.time}</p>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <p className="text-sm text-muted-foreground truncate">{chat.lastMessage}</p>
+                  <div className="flex justify-between items-center mt-0.5">
+                    <p className="text-xs text-muted-foreground truncate">{chat.lastMessage}</p>
                     {chat.unread !== undefined && chat.unread > 0 && (
-                      <span className="ml-2 bg-primary text-primary-foreground text-xs font-bold px-2 py-0.5 rounded-full">
-                        {chat.unread}
+                      <span className="ml-2 bg-primary text-primary-foreground text-xs font-bold px-1.5 py-0.5 rounded-full h-4 w-4 flex items-center justify-center text-[10px]">
+                        {chat.unread > 9 ? '9+' : chat.unread}
                       </span>
                     )}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          </Link>
-        )) : (
-          <div className="flex flex-col items-center justify-center h-full text-center p-4">
-             <MessageSquarePlus className="h-16 w-16 text-muted-foreground mb-4" />
-            <p className="text-lg font-semibold">No chats yet</p>
-            <p className="text-muted-foreground">Start a new conversation by clicking the button above.</p>
-          </div>
-        )}
-      </div>
+              </div>
+            </Link>
+          )) : (
+            <div className="flex flex-col items-center justify-center h-full text-center p-8">
+              <MessageSquareText className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-sm font-medium">No chats yet</p>
+              <p className="text-xs text-muted-foreground">Start a new conversation to see it here.</p>
+            </div>
+          )}
+        </div>
+      </ScrollArea>
     </div>
   );
 }
+
+// This is the main component for the /chats route
+export default function ChatsPageContainer() {
+  const params = useParams();
+  const currentChatId = params?.chatId as string | undefined;
+
+  return (
+    <>
+      <ChatListPanel />
+      {/* The specific chat view ([chatId]/page.tsx) will be rendered here by the layout if a chat is selected */}
+      {/* If no chat is selected, a placeholder could be shown, or this area could be managed by [chatId]/page.tsx or a specific default child route */}
+      {!currentChatId && (
+        <div className="flex-1 items-center justify-center bg-background p-4 hidden md:flex"> {/* Hidden on mobile by default */}
+          <div className="text-center text-muted-foreground">
+            <MessageSquareText size={48} className="mx-auto mb-4" />
+            <p className="text-lg">Select a chat to start messaging</p>
+            <p className="text-sm">or start a new conversation.</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
