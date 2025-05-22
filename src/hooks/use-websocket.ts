@@ -5,27 +5,17 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 interface WebSocketHookOptions {
   maxAttempts?: number;
+  protocols?: string[]; // Added to support WebSocket subprotocols
 }
 
 const useWebSocketConnection = (url: string | null, options: WebSocketHookOptions = {}) => {
-  const [socket, setSocket] = useState<WebSocket | null>(null); // Kept for returning the socket instance if needed by consuming component
+  const [socket, setSocket] = useState<WebSocket | null>(null); 
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
   const maxReconnectAttempts = options.maxAttempts || 5;
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<any>(null);
-
-  const sendMessage = useCallback((data: string | object): boolean => {
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      const message = typeof data === 'string' ? data : JSON.stringify(data);
-      socketRef.current.send(message);
-      return true;
-    } else {
-      console.error('WebSocket is not connected. Cannot send message.');
-      return false;
-    }
-  }, []); // socketRef is stable
 
   const connect = useCallback(() => {
     if (!url) {
@@ -36,13 +26,12 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
     
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
         console.log("WebSocket is already connected.");
-        setIsConnected(true); // Ensure state is correct
+        setIsConnected(true); 
         return;
     }
 
     console.log(`Attempting to connect WebSocket to ${url}, attempt: ${reconnectAttempts + 1}`);
     try {
-      // Close any existing socket first to prevent multiple connections
       if (socketRef.current) {
         socketRef.current.onopen = null;
         socketRef.current.onmessage = null;
@@ -51,23 +40,23 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
         socketRef.current.close();
       }
       
-      const ws = new WebSocket(url);
-      socketRef.current = ws; // Assign to ref immediately
+      const ws = options.protocols && options.protocols.length > 0 
+        ? new WebSocket(url, options.protocols) 
+        : new WebSocket(url);
+      socketRef.current = ws; 
 
       ws.onopen = () => {
         console.log('WebSocket connected successfully to:', url);
         setIsConnected(true);
-        setReconnectAttempts(0); // Reset attempts on successful connection
-        setSocket(ws); // Update state
+        setReconnectAttempts(0); 
+        setSocket(ws); 
       };
 
       ws.onmessage = (event) => {
-        // console.log('WebSocket message received:', event.data);
         try {
             const parsed = JSON.parse(event.data as string);
             setLastMessage(parsed);
             
-            // Example: Handle audio call related messages (can be customized by consumer)
             if (parsed.type === 'call_status' && parsed.status === 'ended') {
               console.log('Call ended by server message:', parsed);
             }
@@ -79,16 +68,14 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
       ws.onclose = (event) => {
         console.log('WebSocket connection closed. Code:', event.code, 'Reason:', event.reason, 'URL:', url);
         setIsConnected(false);
-        setSocket(null); // Clear state
+        setSocket(null); 
         
-        if (socketRef.current === ws) { // Only act if this is the current socket closing
+        if (socketRef.current === ws) { 
             socketRef.current = null;
         }
 
-        // Don't attempt to reconnect if the close was clean (1000) or if URL is null
-        // or if max attempts reached
         if (event.code !== 1000 && url && reconnectAttempts < maxReconnectAttempts) {
-          const timeout = Math.min(1000 * (2 ** reconnectAttempts), 30000); // Exponential backoff
+          const timeout = Math.min(1000 * (2 ** reconnectAttempts), 30000); 
           console.log(`WebSocket attempting to reconnect to ${url} in ${timeout / 1000}s (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
           
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -103,32 +90,28 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
       };
 
       ws.onerror = (errorEvent) => {
-        // An onerror event is always followed by a close event.
         console.error('WebSocket error on connection to:', url, errorEvent);
-        // setIsConnected(false); // onclose will handle this
-        // setSocket(null);
       };
       
     } catch (error) {
       console.error('Error establishing WebSocket connection to:', url, error);
       setIsConnected(false);
       setSocket(null);
-      // Also attempt reconnect on catch if applicable
       if (url && reconnectAttempts < maxReconnectAttempts) {
         const timeout = Math.min(1000 * (2 ** reconnectAttempts), 30000);
         reconnectTimeoutRef.current = setTimeout(() => {
           setReconnectAttempts(prev => prev + 1);
-          // connect(); // connect will be called by useEffect
+          // connect(); 
         }, timeout);
       }
     }
-  }, [url, reconnectAttempts, maxReconnectAttempts]); // Removed socket state from dependencies
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, reconnectAttempts, maxReconnectAttempts, options.protocols]); 
 
-  // Main effect to connect and disconnect
   useEffect(() => {
     if (url) {
         connect();
-    } else { // If URL becomes null, clean up existing socket
+    } else { 
         if (socketRef.current) {
             socketRef.current.close(1000, "URL became null");
             socketRef.current = null;
@@ -145,17 +128,16 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
         console.log("Closing WebSocket connection on component unmount or URL change (cleanup). URL:", socketRef.current.url);
         socketRef.current.onopen = null;
         socketRef.current.onmessage = null;
-        socketRef.current.onclose = null; // Prevent onclose logic from firing during intentional cleanup
+        socketRef.current.onclose = null; 
         socketRef.current.onerror = null;
         socketRef.current.close(1000, "Component unmounting or URL changed");
         socketRef.current = null;
       }
-      setSocket(null); // Clear state on cleanup
+      setSocket(null); 
       setIsConnected(false);
     };
-  }, [url, connect]); // `connect` is memoized and changes when url or reconnectAttempts change
+  }, [url, connect]); 
 
-  // Effect to re-trigger connection when reconnectAttempts changes
    useEffect(() => {
     if (url && reconnectAttempts > 0 && reconnectAttempts <= maxReconnectAttempts && (!socketRef.current || socketRef.current.readyState === WebSocket.CLOSED)) {
         console.log(`Reconnection attempt ${reconnectAttempts} triggered by state change for ${url}.`);
@@ -163,8 +145,17 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
     }
   }, [reconnectAttempts, url, connect, maxReconnectAttempts]);
 
+  const sendMessage = useCallback((data: string | object): boolean => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      const message = typeof data === 'string' ? data : JSON.stringify(data);
+      socketRef.current.send(message);
+      return true;
+    } else {
+      console.error('WebSocket is not connected. Cannot send message.');
+      return false;
+    }
+  }, []); 
 
-  // Add keepalive ping to prevent connection timeout
   useEffect(() => {
     if (!isConnected || !url) return;
     
@@ -176,7 +167,7 @@ const useWebSocketConnection = (url: string | null, options: WebSocketHookOption
           console.warn('Failed to send keepalive ping to', url, err);
         }
       }
-    }, 30000); // 30 seconds
+    }, 30000); 
     
     return () => clearInterval(pingInterval);
   }, [isConnected, sendMessage, url]);
