@@ -54,9 +54,10 @@ export default function ChatListPage() {
     try {
       const users = await getAllUsers(user.uid);
       // Filter out users already in chats (or friends) to simplify - more robust logic can be added
-      const currentFriendOrChattedUserIds = new Set(chats.map(c => c.otherUserId).filter(Boolean));
-      const availableUsers = users.filter(u => !currentFriendOrChattedUserIds.has(u.uid));
-      setAllOtherUsers(availableUsers);
+      // For now, let's assume 'friends' are those in the 'friends' array on the user doc.
+      // We might need to fetch current user's friends list to accurately filter here if desired.
+      // For simplicity, we'll show all users not the current user.
+      setAllOtherUsers(users);
     } catch (error) {
       console.error("Failed to fetch users:", error);
       toast({ title: "Error", description: "Could not load users to add.", variant: "destructive" });
@@ -66,14 +67,15 @@ export default function ChatListPage() {
   };
 
   const handleAddAndChat = async (friend: ChatUser) => {
-    if (!user) return;
+    if (!user || !friend.uid) return;
     try {
-      // For simplicity, directly add as friend. A real app would have requests.
-      // await addFriend(user.uid, friend.uid); 
-      // toast({ title: "Friend Added", description: `${friend.displayName} is now your friend.` });
+      // Establish the "friend" relationship for status viewing
+      await addFriend(user.uid, friend.uid); 
+      toast({ title: "Friend Added", description: `${friend.displayName} is now your friend. You can see each other's statuses.` });
       
       const chatId = await getOrCreateChatWithUser(user.uid, friend.uid);
       setIsAddUserModalOpen(false);
+      setSearchTerm(""); // Clear search term
       router.push(`/chats/${chatId}`);
     } catch (error: any) {
       console.error("Failed to add friend or start chat:", error);
@@ -82,7 +84,7 @@ export default function ChatListPage() {
   };
 
   const filteredUsers = searchTerm
-    ? allOtherUsers.filter(u => u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()))
+    ? allOtherUsers.filter(u => u.displayName?.toLowerCase().includes(searchTerm.toLowerCase()) || u.email?.toLowerCase().includes(searchTerm.toLowerCase()))
     : allOtherUsers;
 
   if (authLoading || isLoadingChats) {
@@ -99,7 +101,10 @@ export default function ChatListPage() {
       <CardHeader className="px-0 py-4">
         <div className="flex items-center justify-between">
           <CardTitle className="text-2xl">Chats</CardTitle>
-          <Dialog open={isAddUserModalOpen} onOpenChange={setIsAddUserModalOpen}>
+          <Dialog open={isAddUserModalOpen} onOpenChange={(isOpen) => {
+            setIsAddUserModalOpen(isOpen);
+            if (!isOpen) setSearchTerm(""); // Clear search on dialog close
+          }}>
             <DialogTrigger asChild>
               <Button variant="ghost" size="icon" onClick={handleOpenAddUserModal}>
                 <MessageSquarePlus className="h-6 w-6 text-primary" />
@@ -109,11 +114,11 @@ export default function ChatListPage() {
             <DialogContent className="sm:max-w-[425px]">
               <DialogHeader>
                 <DialogTitle>Start a new chat</DialogTitle>
-                <DialogDescription>Select a user to start a conversation with.</DialogDescription>
+                <DialogDescription>Select a user to start a conversation with. This will also add them as a friend to see their status updates.</DialogDescription>
               </DialogHeader>
               <div className="py-2">
                 <Input 
-                  placeholder="Search users..." 
+                  placeholder="Search users by name or email..." 
                   value={searchTerm} 
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="mb-4"
@@ -132,14 +137,14 @@ export default function ChatListPage() {
                       >
                         <Avatar>
                           <AvatarImage src={u.photoURL || undefined} alt={u.displayName || "User"} data-ai-hint="person portrait" />
-                          <AvatarFallback>{u.displayName?.substring(0,1) || "U"}</AvatarFallback>
+                          <AvatarFallback>{u.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                         </Avatar>
                         <div>
                           <p className="font-semibold">{u.displayName}</p>
                           <p className="text-xs text-muted-foreground">{u.email}</p>
                         </div>
                       </div>
-                    )) : <p className="text-center text-muted-foreground">No users found.</p>}
+                    )) : <p className="text-center text-muted-foreground">No users found matching your search.</p>}
                   </ScrollArea>
                 )}
               </div>
@@ -149,11 +154,6 @@ export default function ChatListPage() {
             </DialogContent>
           </Dialog>
         </div>
-        {/* Search chats functionality can be added later */}
-        {/* <div className="relative mt-4">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-          <Input placeholder="Search chats..." className="pl-10" />
-        </div> */}
       </CardHeader>
       
       <div className="flex-1 overflow-y-auto -mx-4 sm:-mx-6 lg:-mx-8">
@@ -161,14 +161,14 @@ export default function ChatListPage() {
           <Link href={`/chats/${chat.id}`} key={chat.id} passHref>
             <Card className="mb-0 shadow-none border-0 border-b rounded-none hover:bg-secondary/50 cursor-pointer">
               <CardContent className="p-3 flex items-center space-x-3">
-                <Image 
-                  src={chat.avatar || "https://placehold.co/100x100.png"} 
-                  alt={chat.name || "Chat"} 
-                  width={48} 
-                  height={48} 
-                  className="rounded-full"
-                  data-ai-hint={chat.dataAiHint || "person"}
-                />
+                <Avatar className="h-12 w-12"> {/* Ensured Avatar size consistency */}
+                  <AvatarImage 
+                    src={chat.avatar || "https://placehold.co/100x100.png"} 
+                    alt={chat.name || "Chat"}
+                    data-ai-hint={chat.dataAiHint || "person"}
+                  />
+                  <AvatarFallback>{chat.name?.substring(0,1).toUpperCase() || "C"}</AvatarFallback>
+                </Avatar>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center">
                     <p className="font-semibold truncate">{chat.name}</p>
@@ -176,7 +176,7 @@ export default function ChatListPage() {
                   </div>
                   <div className="flex justify-between items-center">
                     <p className="text-sm text-muted-foreground truncate">{chat.lastMessage}</p>
-                    {chat.unread && chat.unread > 0 && (
+                    {chat.unread !== undefined && chat.unread > 0 && (
                       <span className="ml-2 bg-primary text-primary-foreground text-xs font-bold px-2 py-0.5 rounded-full">
                         {chat.unread}
                       </span>
