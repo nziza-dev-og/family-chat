@@ -171,7 +171,7 @@ export default function ChatPage() {
               <Phone className="h-5 w-5" />
             </Button>
           </Link>
-          <Link href={`/app/(app)/videocall?initialRoomId=${chatId}`} passHref>
+          <Link href={`/videocall?initialRoomId=${chatId}`} passHref>
             <Button variant="ghost" size="icon" aria-label="Start video call">
               <Video className="h-5 w-5" />
             </Button>
