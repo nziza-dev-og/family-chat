@@ -60,7 +60,7 @@ export default function VideoCallPage() {
   const roomUnsubscribeRef = useRef<Unsubscribe | null>(null);
 
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    const currentCallStatus = callStatus;
+    const currentCallStatus = callStatus; // Capture status at invocation
     console.log(`[${chatId}] VIDEO Cleaning up. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${currentCallStatus}`);
     
     if (localStreamRef.current) {
@@ -89,10 +89,10 @@ export default function VideoCallPage() {
                 const roomData = roomSnap.data();
                 if (roomData.callerId === user.uid || roomData.calleeId === user.uid) {
                     if (isCallerInitiatedEnd && roomData.callerId === user.uid && roomData.status === 'ringing' && chatPartner) {
+                         console.log(`[${chatId}] VIDEO Caller (self) ending a ringing call. Adding missed call message for partner: ${chatPartner.uid}`);
                         await addMissedCallMessage(chatId, 'video', user.uid, chatPartner.uid);
                     }
                     
-                    // Only update if not already ended or declined to avoid overwriting.
                     if (roomData.status !== 'ended' && roomData.status !== 'declined') {
                         await updateDoc(roomDocRef, { 
                             status: "ended", 
@@ -108,22 +108,16 @@ export default function VideoCallPage() {
                     callerCandidatesSnap.forEach(doc => batch.delete(doc.ref));
                     calleeCandidatesSnap.forEach(doc => batch.delete(doc.ref));
                     await batch.commit();
-
-                    // Optionally delete the room document itself after a short delay or if status is 'ended'
-                    // For now, we'll leave it for history/debugging, but can be added:
-                    // if (roomData.status === 'ended' || roomData.status === 'declined') {
-                    //    await deleteDoc(roomDocRef);
-                    // }
                 }
             }
         } catch (error) {
-            console.warn("Error during room document cleanup (video):", error);
+            console.warn(`[${chatId}] VIDEO Error during room document cleanup:`, error);
         }
     }
      if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") {
         setCallStatus("Call Ended");
     }
-  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner, callStatus]);
+  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner]); // Removed callStatus
 
 
   useEffect(() => {
@@ -161,7 +155,7 @@ export default function VideoCallPage() {
           router.replace("/chats");
         }
       } catch (error) {
-        console.error("Error fetching chat partner details (video):", error);
+        console.error(`[${chatId}] VIDEO Error fetching chat partner details:`, error);
         toast({ title: "Error", description: "Could not load partner details.", variant: "destructive" });
       } finally {
         setIsLoadingPartner(false);
@@ -172,18 +166,20 @@ export default function VideoCallPage() {
 
   const registerPeerConnectionListeners = useCallback(() => {
     if (!peerConnectionRef.current) return;
-    peerConnectionRef.current.addEventListener('icegatheringstatechange', () => {
-      console.log(`[${chatId}] VIDEO ICE gathering state changed: ${peerConnectionRef.current?.iceGatheringState}`);
+    const pc = peerConnectionRef.current;
+
+    pc.addEventListener('icegatheringstatechange', () => {
+      console.log(`[${chatId}] VIDEO ICE gathering state changed: ${pc?.iceGatheringState}`);
     });
-    peerConnectionRef.current.addEventListener('connectionstatechange', () => {
-      const currentState = peerConnectionRef.current?.connectionState;
+    pc.addEventListener('connectionstatechange', () => {
+      const currentState = pc?.connectionState;
       console.log(`[${chatId}] VIDEO Connection state change: ${currentState}`);
       setCallStatus(prevStatus => {
         let newStatus = prevStatus;
         if (currentState === 'connected') {
           newStatus = "Connected";
            if (user) {
-             updateDoc(roomDocRef, { status: "active", updatedAt: serverTimestamp() }).catch(e => console.warn("Error setting room to active:", e));
+             updateDoc(roomDocRef, { status: "active", updatedAt: serverTimestamp() }).catch(e => console.warn(`[${chatId}] VIDEO Error setting room to active:`, e));
           }
         } else if (currentState === 'disconnected') {
           newStatus = "Reconnecting...";
@@ -192,20 +188,21 @@ export default function VideoCallPage() {
           cleanupCall(true, false);
         } else if (currentState === 'closed') {
           newStatus = "Call Ended";
-          // cleanupCall might have already been called by user action or other failure
-          // if (prevStatus !== "Call Ended" && prevStatus !== "Call Failed") cleanupCall(true, false);
         }
         return newStatus;
       });
     });
-    peerConnectionRef.current.addEventListener('signalingstatechange', () => {
-      console.log(`[${chatId}] VIDEO Signaling state change: ${peerConnectionRef.current?.signalingState}`);
+    pc.addEventListener('signalingstatechange', () => {
+      console.log(`[${chatId}] VIDEO Signaling state change: ${pc?.signalingState}`);
     });
   }, [chatId, user, roomDocRef, cleanupCall]);
 
 
   const setupSignaling = useCallback(async () => {
-    if (!user || !peerConnectionRef.current || !chatPartner) return;
+    if (!user || !peerConnectionRef.current || !chatPartner) {
+        console.log(`[${chatId}] VIDEO setupSignaling pre-condition fail: user=${!!user}, pc=${!!peerConnectionRef.current}, partner=${!!chatPartner}`);
+        return;
+    }
     const pc = peerConnectionRef.current;
 
     roomUnsubscribeRef.current = onSnapshot(roomDocRef, async (snapshot) => {
@@ -213,7 +210,7 @@ export default function VideoCallPage() {
       if (!roomData) {
         if (callStatus !== "Call Ended" && callStatus !== "Call Failed") {
            toast({ title: "Call Ended", description: "The call was terminated." });
-           await cleanupCall(false); // Don't update Firestore if doc is gone
+           await cleanupCall(false); 
            router.back();
         }
         return;
@@ -228,13 +225,25 @@ export default function VideoCallPage() {
         return;
       }
       
-      // Callee receives offer
       if (roomData.offer && roomData.calleeId === user.uid && !pc.currentRemoteDescription && roomData.status === 'ringing') {
         setCallStatus("Offer received, creating answer...");
         try {
+            if (pc.signalingState === "closed") {
+                console.error(`[${chatId}] VIDEO Cannot set remote description from offer, PC is closed.`);
+                setCallStatus("Call Failed");
+                await cleanupCall(true, false);
+                return;
+            }
             await pc.setRemoteDescription(new RTCSessionDescription(roomData.offer));
+
+            if (pc.signalingState === "closed") {
+                console.error(`[${chatId}] VIDEO Cannot create answer, PC is closed after setting remote desc.`);
+                setCallStatus("Call Failed");
+                return;
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+
             if (pc.localDescription) { 
                 await updateDoc(roomDocRef, { 
                     answer: pc.localDescription.toJSON(), 
@@ -244,21 +253,26 @@ export default function VideoCallPage() {
             }
             setCallStatus("Answer sent, connecting...");
         } catch(e) {
-            console.error("Error processing offer or creating answer (video):", e);
+            console.error(`[${chatId}] VIDEO Error processing offer or creating answer:`, e);
             setCallStatus("Connection error");
             toast({title: "Connection Error", description: "Failed to process call offer.", variant: "destructive"});
             await cleanupCall(true, false);
         }
       }
 
-      // Caller receives answer
       if (roomData.answer && roomData.callerId === user.uid && pc.signalingState === "have-local-offer") {
          if (!pc.currentRemoteDescription) { 
             setCallStatus("Answer received, connecting...");
             try {
+                if (pc.signalingState === "closed") {
+                    console.error(`[${chatId}] VIDEO Cannot set remote description from answer, PC is closed.`);
+                    setCallStatus("Call Failed");
+                    await cleanupCall(true, false);
+                    return;
+                }
                 await pc.setRemoteDescription(new RTCSessionDescription(roomData.answer));
             } catch(e) {
-                console.error("Error setting remote description from answer (video):", e);
+                console.error(`[${chatId}] VIDEO Error setting remote description from answer:`, e);
                 setCallStatus("Connection error");
                 toast({title: "Connection Error", description: "Failed to process call answer.", variant: "destructive"});
                 await cleanupCall(true, false);
@@ -267,10 +281,13 @@ export default function VideoCallPage() {
       }
     });
 
-    // Listen for ICE candidates
-    const ourRoleIsCaller = (await getDoc(roomDocRef)).data()?.callerId === user.uid;
-    const candidatesToListen = ourRoleIsCaller ? calleeCandidatesCollectionRef : callerCandidatesCollectionRef;
+    const initialRoomSnap = await getDoc(roomDocRef);
+    const initialRoomData = initialRoomSnap.data();
+    const amICallerForThisSetup = initialRoomData?.callerId === user.uid;
     
+    const candidatesToListen = amICallerForThisSetup ? calleeCandidatesCollectionRef : callerCandidatesCollectionRef;
+    const candidatesToSendTo = amICallerForThisSetup ? callerCandidatesCollectionRef : calleeCandidatesCollectionRef;
+
     const iceUnsubscribe = onSnapshot(candidatesToListen, (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
         if (change.type === "added") {
@@ -278,7 +295,9 @@ export default function VideoCallPage() {
              try {
                 await pc.addIceCandidate(new RTCIceCandidate(change.doc.data().candidate));
              } catch (e) {
-                console.error("Error adding received ICE candidate (video)", e);
+                if (pc.signalingState !== "closed") {
+                    console.warn(`[${chatId}] VIDEO Error adding received ICE candidate:`, e);
+                }
              }
            }
         }
@@ -286,11 +305,28 @@ export default function VideoCallPage() {
     });
     iceListenersUnsubscribeRef.current.push(iceUnsubscribe);
 
-    const roomSnap = await getDoc(roomDocRef);
-    if (!roomSnap.exists() || (roomSnap.data()?.calleeId !== user.uid && roomSnap.data()?.callerId !== user.uid) || roomSnap.data()?.status === 'ended' || roomSnap.data()?.status === 'declined') {
-        // If no room, or I'm not part of it, or it's already ended/declined, I'm the caller
+    if (pc && pc.signalingState !== 'closed') {
+        pc.onicecandidate = async event => {
+          if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+            await addDoc(candidatesToSendTo, { candidate: event.candidate.toJSON() });
+          }
+        };
+    }
+
+
+    if (!initialRoomData || 
+        initialRoomData.status === 'ended' || 
+        initialRoomData.status === 'declined' ||
+        (initialRoomData.calleeId !== user.uid && initialRoomData.callerId !== user.uid) ||
+        (initialRoomData.calleeId === user.uid && initialRoomData.status !== 'ringing')
+       ) {
         setCallStatus("Creating offer...");
         try {
+            if (pc.signalingState === "closed") {
+                console.error(`[${chatId}] VIDEO Cannot create offer, PC is already closed before attempt.`);
+                setCallStatus("Call Failed");
+                return;
+            }
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             if (pc.localDescription) { 
@@ -305,18 +341,18 @@ export default function VideoCallPage() {
                 });
             }
             setCallStatus("Calling partner, waiting for answer...");
-        } catch (e) {
-            console.error("Error creating offer (video):", e);
+        } catch (e: any) {
+            console.error(`[${chatId}] VIDEO Error creating offer:`, e);
             setCallStatus("Failed to start call");
-            toast({title: "Call Error", description: "Could not initiate the call.", variant: "destructive"});
+            toast({title: "Call Error", description: e.message || "Could not initiate the call.", variant: "destructive"});
             await cleanupCall(true, false);
         }
-    } else if (roomSnap.exists() && roomSnap.data()?.callerId === user.uid && !roomSnap.data()?.answer && roomSnap.data()?.status === 'ringing') {
+    } else if (initialRoomData.callerId === user.uid && !initialRoomData.answer && initialRoomData.status === 'ringing') {
         setCallStatus("Calling partner, waiting for answer..."); 
-    } else if (roomSnap.exists() && roomSnap.data()?.calleeId === user.uid && roomSnap.data()?.status === 'ringing' && !roomSnap.data()?.answer) {
-        setCallStatus("Waiting for connection setup..."); // Callee waiting for offer to be processed
+    } else if (initialRoomData.calleeId === user.uid && initialRoomData.status === 'ringing' && !initialRoomData.answer) {
+        setCallStatus("Waiting for connection setup...");
     }
-  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, callStatus]);
+  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId, callStatus]); // Added chatId and callStatus
 
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) {
@@ -359,26 +395,17 @@ export default function VideoCallPage() {
             if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
           });
         };
-
-        pc.onicecandidate = async event => {
-          if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
-            const roomData = (await getDoc(roomDocRef)).data();
-            const amICaller = roomData?.callerId === user.uid;
-            const targetCollection = amICaller ? callerCandidatesCollectionRef : calleeCandidatesCollectionRef;
-            await addDoc(targetCollection, { candidate: event.candidate.toJSON() });
-          }
-        };
         
         await setupSignaling();
 
-      } catch (error) {
-        console.error("Error accessing media devices (video):", error);
+      } catch (error: any) {
+        console.error(`[${chatId}] VIDEO Error accessing media devices or during init:`, error);
         setHasPermission(false);
         setCallStatus("Permission Denied");
         toast({
           variant: "destructive",
           title: "Media Access Denied",
-          description: "Please enable camera and microphone permissions.",
+          description: error.message || "Please enable camera and microphone permissions.",
           duration: 5000,
         });
         await cleanupCall(true, false); 
@@ -480,12 +507,12 @@ export default function VideoCallPage() {
       </header>
 
       <div className="flex-1 flex flex-col md:flex-row items-center justify-center p-4 gap-4 relative">
-        {!hasPermission && callStatus === "Permission Denied" && (
+        {!hasPermission && (callStatus === "Permission Denied" || callStatus === "Failed to start call") && (
           <Alert variant="destructive" className="absolute top-4 left-1/2 -translate-x-1/2 w-auto max-w-md z-30">
             <ShieldAlert className="h-5 w-5" />
-            <AlertTitle>Permissions Required</AlertTitle>
+            <AlertTitle>Permissions or Setup Required</AlertTitle>
             <AlertDescription>
-              Camera and microphone access is required. Please enable them in browser settings.
+              Camera and microphone access is required, or the call could not be initiated. Please check permissions and try again.
             </AlertDescription>
           </Alert>
         )}
@@ -497,6 +524,9 @@ export default function VideoCallPage() {
           )}
            {callStatus === "Reconnecting..." && (
             <p className="text-yellow-400 absolute animate-pulse">Reconnecting...</p>
+          )}
+          {callStatus === "Call Failed" && (
+            <p className="text-red-400 absolute">Call Failed. Please try again.</p>
           )}
            {chatPartner && (
             <div className="absolute bottom-2 left-2 bg-black/50 p-1 px-2 rounded text-xs">
@@ -515,13 +545,13 @@ export default function VideoCallPage() {
 
       <footer className="p-4 border-t border-gray-700 bg-gray-800 sticky bottom-0 z-20">
         <div className="flex items-center justify-center space-x-4">
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed"}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed" || callStatus === "Permission Denied"}>
             {isMicMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
           </Button>
-          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed"}>
+          <Button variant="ghost" size="lg" className="rounded-full p-3 text-white hover:bg-gray-700" onClick={toggleCamera} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed" || callStatus === "Permission Denied"}>
             {isCameraOff ? <VideoOff className="h-6 w-6" /> : <Video className="h-6 w-6" />}
           </Button>
-          <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" || callStatus === "Call Failed"}>
+          <Button variant="destructive" size="lg" className="rounded-full p-3 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" && callStatus === "Call Failed"}>
             <PhoneOff className="h-6 w-6" />
           </Button>
         </div>
@@ -529,3 +559,4 @@ export default function VideoCallPage() {
     </div>
   );
 }
+

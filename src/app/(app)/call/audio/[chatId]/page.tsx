@@ -40,8 +40,8 @@ export default function AudioCallPage() {
   const [chatPartner, setChatPartner] = useState<ChatPartner | null>(null);
   const [isLoadingPartner, setIsLoadingPartner] = useState(true);
   
-  const localAudioRef = useRef<HTMLAudioElement>(null); // For local audio playback (muted)
-  const remoteAudioRef = useRef<HTMLAudioElement>(null); // For remote audio playback
+  const localAudioRef = useRef<HTMLAudioElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -59,7 +59,7 @@ export default function AudioCallPage() {
   const roomUnsubscribeRef = useRef<Unsubscribe | null>(null);
   
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    const currentCallStatus = callStatus;
+    const currentCallStatus = callStatus; // Capture status at invocation
     console.log(`[${chatId}] AUDIO Cleaning up. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${currentCallStatus}`);
     
     if (localStreamRef.current) {
@@ -88,6 +88,7 @@ export default function AudioCallPage() {
                 const roomData = roomSnap.data();
                  if (roomData.callerId === user.uid || roomData.calleeId === user.uid) {
                     if (isCallerInitiatedEnd && roomData.callerId === user.uid && roomData.status === 'ringing' && chatPartner) {
+                        console.log(`[${chatId}] AUDIO Caller (self) ending a ringing call. Adding missed call message for partner: ${chatPartner.uid}`);
                         await addMissedCallMessage(chatId, 'audio', user.uid, chatPartner.uid);
                     }
                     if (roomData.status !== 'ended' && roomData.status !== 'declined') {
@@ -99,22 +100,30 @@ export default function AudioCallPage() {
                         });
                     }
                     
+                    // Delete ICE candidates
                     const callerCandidatesSnap = await getDocs(callerCandidatesCollectionRef);
                     const calleeCandidatesSnap = await getDocs(calleeCandidatesCollectionRef);
                     const batch = writeBatch(db);
                     callerCandidatesSnap.forEach(doc => batch.delete(doc.ref));
                     calleeCandidatesSnap.forEach(doc => batch.delete(doc.ref));
                     await batch.commit();
+
+                    // Optionally delete the room document itself if status is 'ended' or 'declined'
+                    // For example, after a short delay or based on specific logic
+                    // if (roomData.status === 'ended' || roomData.status === 'declined') {
+                    //   // Consider conditions for deleting the room document itself
+                    //   // await deleteDoc(roomDocRef); 
+                    // }
                 }
             }
         } catch (error) {
-            console.warn("Error during room document cleanup (audio):", error);
+            console.warn(`[${chatId}] AUDIO Error during room document cleanup:`, error);
         }
     }
      if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") { 
       setCallStatus("Call Ended");
     }
-  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner, callStatus]); 
+  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner]); // Removed callStatus
 
 
   useEffect(() => {
@@ -152,7 +161,7 @@ export default function AudioCallPage() {
           router.replace("/chats");
         }
       } catch (error) {
-        console.error("Error fetching chat partner details (audio):", error);
+        console.error(`[${chatId}] AUDIO Error fetching chat partner details:`, error);
         toast({ title: "Error", description: "Could not load partner details.", variant: "destructive" });
       } finally {
         setIsLoadingPartner(false);
@@ -163,18 +172,20 @@ export default function AudioCallPage() {
 
   const registerPeerConnectionListeners = useCallback(() => {
     if (!peerConnectionRef.current) return;
-    peerConnectionRef.current.addEventListener('icegatheringstatechange', () => {
-      console.log(`[${chatId}] AUDIO ICE gathering state changed: ${peerConnectionRef.current?.iceGatheringState}`);
+    const pc = peerConnectionRef.current;
+
+    pc.addEventListener('icegatheringstatechange', () => {
+      console.log(`[${chatId}] AUDIO ICE gathering state changed: ${pc?.iceGatheringState}`);
     });
-    peerConnectionRef.current.addEventListener('connectionstatechange', () => {
-      const currentState = peerConnectionRef.current?.connectionState;
+    pc.addEventListener('connectionstatechange', () => {
+      const currentState = pc?.connectionState;
       console.log(`[${chatId}] AUDIO Connection state change: ${currentState}`);
        setCallStatus(prevStatus => {
         let newStatus = prevStatus;
         if (currentState === 'connected') {
           newStatus = "Connected";
            if (user) {
-             updateDoc(roomDocRef, { status: "active", updatedAt: serverTimestamp() }).catch(e => console.warn("Error setting room to active:", e));
+             updateDoc(roomDocRef, { status: "active", updatedAt: serverTimestamp() }).catch(e => console.warn(`[${chatId}] AUDIO Error setting room to active:`, e));
           }
         } else if (currentState === 'disconnected') {
           newStatus = "Reconnecting...";
@@ -183,20 +194,23 @@ export default function AudioCallPage() {
           cleanupCall(true, false);
         } else if (currentState === 'closed') {
           newStatus = "Call Ended";
-          // cleanupCall might have already been called by user action or other failure
-          // if (prevStatus !== "Call Ended" && prevStatus !== "Call Failed") cleanupCall(true, false);
+          // No need to call cleanupCall here if already in 'failed' or if user initiated end.
+          // cleanupCall will be called by unmount or explicit end.
         }
         return newStatus;
       });
     });
-    peerConnectionRef.current.addEventListener('signalingstatechange', () => {
-      console.log(`[${chatId}] AUDIO Signaling state change: ${peerConnectionRef.current?.signalingState}`);
+    pc.addEventListener('signalingstatechange', () => {
+      console.log(`[${chatId}] AUDIO Signaling state change: ${pc?.signalingState}`);
     });
   }, [chatId, user, roomDocRef, cleanupCall]);
 
 
   const setupSignaling = useCallback(async () => {
-    if (!user || !peerConnectionRef.current || !chatPartner) return;
+    if (!user || !peerConnectionRef.current || !chatPartner) {
+        console.log(`[${chatId}] AUDIO setupSignaling pre-condition fail: user=${!!user}, pc=${!!peerConnectionRef.current}, partner=${!!chatPartner}`);
+        return;
+    }
     const pc = peerConnectionRef.current;
 
     roomUnsubscribeRef.current = onSnapshot(roomDocRef, async (snapshot) => {
@@ -222,9 +236,23 @@ export default function AudioCallPage() {
       if (roomData.offer && roomData.calleeId === user.uid && !pc.currentRemoteDescription && roomData.status === 'ringing') {
         setCallStatus("Offer received, creating answer...");
         try {
+            if (pc.signalingState === "closed") {
+                console.error(`[${chatId}] AUDIO Cannot set remote description from offer, PC is closed.`);
+                setCallStatus("Call Failed");
+                await cleanupCall(true, false); // Cleanup as this path is now invalid
+                return;
+            }
             await pc.setRemoteDescription(new RTCSessionDescription(roomData.offer));
+            
+            if (pc.signalingState === "closed") {
+                console.error(`[${chatId}] AUDIO Cannot create answer, PC is closed after setting remote desc.`);
+                setCallStatus("Call Failed");
+                // cleanupCall might have already been called if setting remote desc failed and closed PC
+                return;
+            }
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+
             if (pc.localDescription) { 
                 await updateDoc(roomDocRef, { 
                     answer: pc.localDescription.toJSON(), 
@@ -234,7 +262,7 @@ export default function AudioCallPage() {
             }
             setCallStatus("Answer sent, connecting...");
         } catch(e) {
-            console.error("Error processing offer or creating answer (audio):", e);
+            console.error(`[${chatId}] AUDIO Error processing offer or creating answer:`, e);
             setCallStatus("Connection error");
             toast({title: "Connection Error", description: "Failed to process call offer.", variant: "destructive"});
             await cleanupCall(true, false);
@@ -245,9 +273,15 @@ export default function AudioCallPage() {
         if (!pc.currentRemoteDescription) {
             setCallStatus("Answer received, connecting...");
             try {
+                if (pc.signalingState === "closed") {
+                    console.error(`[${chatId}] AUDIO Cannot set remote description from answer, PC is closed.`);
+                    setCallStatus("Call Failed");
+                    await cleanupCall(true, false);
+                    return;
+                }
                 await pc.setRemoteDescription(new RTCSessionDescription(roomData.answer));
             } catch (e) {
-                console.error("Error setting remote description from answer (audio):", e);
+                console.error(`[${chatId}] AUDIO Error setting remote description from answer:`, e);
                 setCallStatus("Connection error");
                 toast({title: "Connection Error", description: "Failed to process call answer.", variant: "destructive"});
                 await cleanupCall(true, false);
@@ -256,9 +290,16 @@ export default function AudioCallPage() {
       }
     });
 
-    const ourRoleIsCaller = (await getDoc(roomDocRef)).data()?.callerId === user.uid;
-    const candidatesToListen = ourRoleIsCaller ? calleeCandidatesCollectionRef : callerCandidatesCollectionRef;
+    // Determine if current user is the caller for this room setup
+    const initialRoomSnap = await getDoc(roomDocRef);
+    const initialRoomData = initialRoomSnap.data();
+    const amICallerForThisSetup = initialRoomData?.callerId === user.uid;
+    
+    const candidatesToListen = amICallerForThisSetup ? calleeCandidatesCollectionRef : callerCandidatesCollectionRef;
+    const candidatesToSendTo = amICallerForThisSetup ? callerCandidatesCollectionRef : calleeCandidatesCollectionRef;
 
+
+    // Listen for ICE candidates
     const iceUnsubscribe = onSnapshot(candidatesToListen, (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
         if (change.type === "added") {
@@ -266,7 +307,9 @@ export default function AudioCallPage() {
              try {
                 await pc.addIceCandidate(new RTCIceCandidate(change.doc.data().candidate));
              } catch (e) {
-                console.error("Error adding received ICE candidate (audio)", e);
+                if (pc.signalingState !== "closed") { // Only log if PC isn't already closed
+                    console.warn(`[${chatId}] AUDIO Error adding received ICE candidate:`, e);
+                }
              }
            }
         }
@@ -274,10 +317,38 @@ export default function AudioCallPage() {
     });
     iceListenersUnsubscribeRef.current.push(iceUnsubscribe);
 
-    const roomSnap = await getDoc(roomDocRef);
-    if (!roomSnap.exists() || (roomSnap.data()?.calleeId !== user.uid && roomSnap.data()?.callerId !== user.uid) || roomSnap.data()?.status === 'ended' || roomSnap.data()?.status === 'declined') {
+    // Handle pc.onicecandidate to send candidates
+     if (pc && pc.signalingState !== 'closed') {
+        pc.onicecandidate = async event => {
+            if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+                // const currentRoomData = (await getDoc(roomDocRef)).data(); // Re-fetch to ensure role is current
+                // const amICallerNow = currentRoomData?.callerId === user.uid;
+                // const targetCollection = amICallerNow ? callerCandidatesCollectionRef : calleeCandidatesCollectionRef;
+                // No, this should be based on the role *for this setup action*.
+                // If I initiated the offer, my candidates go to 'callerCandidates'.
+                // If I initiated the answer, my candidates go to 'calleeCandidates'.
+                await addDoc(candidatesToSendTo, { candidate: event.candidate.toJSON() });
+            }
+        };
+    }
+
+
+    // Logic to create offer if not callee of a ringing call
+    if (!initialRoomData || 
+        initialRoomData.status === 'ended' || 
+        initialRoomData.status === 'declined' ||
+        (initialRoomData.calleeId !== user.uid && initialRoomData.callerId !== user.uid) || // Not part of this call
+        (initialRoomData.calleeId === user.uid && initialRoomData.status !== 'ringing') // Callee but not ringing
+       ) {
         setCallStatus("Creating offer...");
         try {
+            if (pc.signalingState === "closed") {
+                console.error(`[${chatId}] AUDIO Cannot create offer, PC is already closed before attempt.`);
+                setCallStatus("Call Failed");
+                // cleanupCall might have already been called if PC was closed due to other reasons.
+                // Avoid calling it again if it might cause issues or redundant Firestore updates.
+                return;
+            }
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             if (pc.localDescription) { 
@@ -292,23 +363,25 @@ export default function AudioCallPage() {
                 });
             }
             setCallStatus("Calling partner, waiting for answer...");
-        } catch (e) {
-            console.error("Error creating offer (audio):", e);
+        } catch (e: any) {
+            console.error(`[${chatId}] AUDIO Error creating offer:`, e);
             setCallStatus("Failed to start call");
-            toast({title: "Call Error", description: "Could not initiate the call.", variant: "destructive"});
+            toast({title: "Call Error", description: e.message || "Could not initiate the call.", variant: "destructive"});
             await cleanupCall(true, false);
         }
-    } else if (roomSnap.exists() && roomSnap.data()?.callerId === user.uid && !roomSnap.data()?.answer && roomSnap.data()?.status === 'ringing') {
-        setCallStatus("Calling partner, waiting for answer...");
-    } else if (roomSnap.exists() && roomSnap.data()?.calleeId === user.uid && roomSnap.data()?.status === 'ringing' && !roomSnap.data()?.answer) {
-        setCallStatus("Waiting for connection setup...");
+    } else if (initialRoomData.callerId === user.uid && !initialRoomData.answer && initialRoomData.status === 'ringing') {
+        setCallStatus("Calling partner, waiting for answer..."); // Caller rejoining/refreshing a ringing call
+    } else if (initialRoomData.calleeId === user.uid && initialRoomData.status === 'ringing' && !initialRoomData.answer) {
+        // Callee has landed here, possibly directly or after answering dialog. Offer processing happens above in onSnapshot.
+        setCallStatus("Waiting for connection setup..."); 
     }
-  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, callStatus]);
+  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId, callStatus]); // Added chatId and callStatus
 
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) {
         return;
     }
+    // Guard against re-initialization if call already started or ended.
     if (peerConnectionRef.current || callStatus === "Call Ended" || callStatus === "Call Failed") {
         console.log(`[${chatId}] AUDIO Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, Status: ${callStatus}`);
         return;
@@ -323,7 +396,7 @@ export default function AudioCallPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         localStreamRef.current = stream;
-        if (localAudioRef.current) { // For local feedback if needed, usually muted
+        if (localAudioRef.current) { 
           localAudioRef.current.srcObject = stream; 
         }
         setHasPermission(true);
@@ -345,28 +418,21 @@ export default function AudioCallPage() {
           event.streams[0].getTracks().forEach(track => {
             if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
           });
-          if (remoteAudioRef.current) remoteAudioRef.current.play().catch(e => console.error("Error playing remote audio:", e));
-        };
-
-        pc.onicecandidate = async event => {
-          if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
-            const roomData = (await getDoc(roomDocRef)).data();
-            const amICaller = roomData?.callerId === user.uid;
-            const targetCollection = amICaller ? callerCandidatesCollectionRef : calleeCandidatesCollectionRef;
-            await addDoc(targetCollection, { candidate: event.candidate.toJSON() });
+          if (remoteAudioRef.current && remoteAudioRef.current.paused) {
+             remoteAudioRef.current.play().catch(e => console.error(`[${chatId}] AUDIO Error playing remote audio:`, e));
           }
         };
         
         await setupSignaling();
 
-      } catch (error) {
-        console.error("Error accessing microphone (audio):", error);
+      } catch (error: any) {
+        console.error(`[${chatId}] AUDIO Error accessing microphone or during init:`, error);
         setHasPermission(false);
         setCallStatus("Permission Denied");
         toast({
           variant: "destructive",
           title: "Microphone Access Denied",
-          description: "Please enable microphone permission in your browser settings.",
+          description: error.message || "Please enable microphone permission in your browser settings.",
           duration: 5000,
         });
         await cleanupCall(true, false);
@@ -450,12 +516,12 @@ export default function AudioCallPage() {
       </header>
 
       <div className="flex-1 flex flex-col items-center justify-center p-4 space-y-8">
-        {!hasPermission && callStatus === "Permission Denied" && (
+        {!hasPermission && (callStatus === "Permission Denied" || callStatus === "Failed to start call") && (
            <Alert variant="destructive" className="w-auto max-w-md">
             <ShieldAlert className="h-5 w-5" />
-            <AlertTitle>Permission Required</AlertTitle>
+            <AlertTitle>Permission or Setup Required</AlertTitle>
             <AlertDescription>
-              Microphone access is required. Please enable it in browser settings.
+              Microphone access is required, or the call could not be initiated. Please check permissions and try again.
             </AlertDescription>
           </Alert>
         )}
@@ -475,14 +541,17 @@ export default function AudioCallPage() {
         {callStatus === "Reconnecting..." && (
             <p className="text-sm text-yellow-400 animate-pulse">Reconnecting...</p>
         )}
+         {callStatus === "Call Failed" && (
+            <p className="text-sm text-red-400">Call Failed. Please try again.</p>
+        )}
       </div>
 
       <footer className="p-6 border-t border-gray-700 bg-gray-700 sticky bottom-0 z-10">
         <div className="flex items-center justify-center space-x-6">
-          <Button variant="outline" size="lg" className="rounded-full p-4 bg-gray-600 border-gray-500 text-white hover:bg-gray-500" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed"}>
+          <Button variant="outline" size="lg" className="rounded-full p-4 bg-gray-600 border-gray-500 text-white hover:bg-gray-500" onClick={toggleMic} disabled={!hasPermission || callStatus === "Call Ended" || callStatus === "Call Failed" || callStatus === "Permission Denied"}>
             {isMicMuted ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
           </Button>
-          <Button variant="destructive" size="lg" className="rounded-full p-4 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" || callStatus === "Call Failed"}>
+          <Button variant="destructive" size="lg" className="rounded-full p-4 bg-red-600 hover:bg-red-700" onClick={handleEndCall} disabled={callStatus === "Call Ended" && callStatus === "Call Failed"}>
             <PhoneOff className="h-7 w-7" />
           </Button>
         </div>
@@ -490,3 +559,4 @@ export default function AudioCallPage() {
     </div>
   );
 }
+
