@@ -1,22 +1,10 @@
 
 import type {Metadata} from 'next';
-// import {Geist, Geist_Mono} from 'next/font/google'; // Removed to stop preloading
 import './globals.css';
 import { AuthProvider } from '@/providers/AuthProvider';
-import { IncomingCallProvider } from "@/contexts/IncomingCallContext"; // Import IncomingCallProvider
+import { IncomingCallProvider } from "@/contexts/IncomingCallContext";
 import { Toaster } from "@/components/ui/toaster";
-
-// const geistSans = Geist({ // Removed font setup
-//   variable: '--font-geist-sans',
-//   subsets: ['latin'],
-//   display: 'swap',
-// });
-
-// const geistMono = Geist_Mono({ // Removed font setup
-//   variable: '--font-geist-mono',
-//   subsets: ['latin'],
-//   display: 'swap',
-// });
+import { TooltipProvider } from "@/components/ui/tooltip"; // Import TooltipProvider
 
 export const metadata: Metadata = {
   title: 'FamilyChat',
@@ -30,15 +18,18 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      {/* Removed geistSans.variable and geistMono.variable from className */}
       <body className="antialiased">
         <AuthProvider>
-          <IncomingCallProvider> {/* Wrap with IncomingCallProvider */}
-            {children}
-            <Toaster />
+          <IncomingCallProvider>
+            <TooltipProvider delayDuration={0}> {/* Wrap with TooltipProvider */}
+              {children}
+              <Toaster />
+            </TooltipProvider>
           </IncomingCallProvider>
         </AuthProvider>
       </body>
     </html>
   );
 }
+
+    

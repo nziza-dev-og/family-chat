@@ -3,7 +3,7 @@
 
 import type { ReactNode} from 'react';
 import { useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation"; 
+import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
@@ -14,11 +14,12 @@ import { db } from "@/lib/firebase";
 import { collection, query, where, onSnapshot, doc, getDoc, Timestamp, type DocumentData } from "firebase/firestore";
 import type { ChatUser } from '@/lib/chatActions';
 import type { IncomingCallData } from '@/contexts/IncomingCallContext';
+import { Logo } from '@/components/icons/Logo'; // Import Logo
 
 function AppContent({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const pathname = usePathname(); 
+  const pathname = usePathname();
   const { presentIncomingCall, incomingCall, clearIncomingCall } = useIncomingCall();
 
   useEffect(() => {
@@ -30,27 +31,26 @@ function AppContent({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user || !presentIncomingCall || !clearIncomingCall) return;
 
-    // Listen for calls where the current user is the callee.
     const roomsQuery = query(
-      collection(db, "rooms"), // Listen to 'rooms' collection
+      collection(db, "rooms"),
       where("calleeId", "==", user.uid),
-      // where("status", "==", "ringing") // Initial filter, but also need to handle changes
+      // where("status", "==", "ringing") // Initial filter, status changes are handled by logic below
     );
 
     const unsubscribe = onSnapshot(roomsQuery, async (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
-        const roomDocData = change.doc.data() as DocumentData & { 
-            callerId: string; 
-            calleeId: string; 
-            callType: 'audio' | 'video'; 
+        const roomDocData = change.doc.data() as DocumentData & {
+            callerId: string;
+            calleeId: string;
+            callType: 'audio' | 'video';
             status: string;
-            offer?: any; // Offer should exist for ringing
+            offer?: any;
         };
-        const roomDocId = change.doc.id; // This is also the chatId for 1-on-1
+        const roomDocId = change.doc.id;
 
         if (change.type === "added" || change.type === "modified") {
           if (roomDocData.status === 'ringing' && roomDocData.offer) {
-            if (pathname?.includes(`/call/${roomDocData.callType}/${roomDocId}`)) {
+            if (pathname?.includes(`/call/${roomDocData.callType}/${roomDocId}`) || pathname?.includes(`/videocall?initialRoomId=${roomDocId}`)) {
                 if (incomingCall && incomingCall.callDocId === roomDocId) clearIncomingCall('navigating_away');
                 return;
             }
@@ -61,7 +61,7 @@ function AppContent({ children }: { children: ReactNode }) {
                 if (userDocSnap.exists()) {
                   const callerData = userDocSnap.data() as ChatUser;
                   presentIncomingCall({
-                    chatId: roomDocId, 
+                    chatId: roomDocId,
                     caller: {
                       uid: callerData.uid,
                       displayName: callerData.displayName || "Unknown Caller",
@@ -97,10 +97,11 @@ function AppContent({ children }: { children: ReactNode }) {
         }
       });
 
+      // Check if any existing presented call is no longer valid
       if (incomingCall) {
         const currentCallDocSnap = await getDoc(doc(db, "rooms", incomingCall.callDocId));
-        if (!currentCallDocSnap.exists() || 
-            currentCallDocSnap.data()?.status !== 'ringing' || 
+        if (!currentCallDocSnap.exists() ||
+            currentCallDocSnap.data()?.status !== 'ringing' ||
             currentCallDocSnap.data()?.calleeId !== user.uid) {
             if (currentCallDocSnap.data()?.status === 'ended' || currentCallDocSnap.data()?.status === 'declined'){
                 clearIncomingCall('call_ended_by_other', {
@@ -112,13 +113,10 @@ function AppContent({ children }: { children: ReactNode }) {
             } else if (currentCallDocSnap.data()?.status === 'answered' || currentCallDocSnap.data()?.status === 'active') {
                 clearIncomingCall('answered');
             } else {
-                // If the call is no longer ringing for this user for other reasons, clear the dialog.
-                // This is a safeguard against the dialog sticking if the document state becomes inconsistent
-                // with an active ringing presentation.
-                const presentedCallData = incomingCall; // copy to avoid race condition if incomingCall changes during async
+                const presentedCallData = incomingCall;
                 if(presentedCallData && presentedCallData.callDocId === currentCallDocSnap.id){
                     console.log("Clearing stale incoming call dialog for room:", presentedCallData.callDocId);
-                    clearIncomingCall(); 
+                    clearIncomingCall();
                 }
             }
         }
@@ -147,11 +145,12 @@ function AppContent({ children }: { children: ReactNode }) {
     <SidebarProvider defaultOpen>
         <AppSidebar />
         <SidebarInset>
-          <header className="sticky top-0 z-10 flex h-14 items-center gap-4 border-b bg-background/80 backdrop-blur-sm px-4 md:hidden">
-            <SidebarTrigger />
-            <h1 className="text-lg font-semibold">FamilyChat</h1>
+          <header className="sticky top-0 z-10 flex h-14 items-center gap-4 border-b bg-primary text-primary-foreground px-4 md:hidden shadow-sm">
+            <SidebarTrigger className="text-primary-foreground hover:bg-primary/80" />
+            <Logo className="h-7 fill-current text-primary-foreground" />
+            {/* <h1 className="text-lg font-semibold">FamilyChat</h1> Removed in favor of Logo */}
           </header>
-          <main className="flex-1 overflow-auto p-4 md:p-6 lg:p-8">
+          <main className="flex-1 overflow-auto bg-background [--header-height:56px] md:[--header-height:0px]">
             {children}
           </main>
         </SidebarInset>
@@ -168,3 +167,5 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     </IncomingCallProvider>
   );
 }
+
+    
