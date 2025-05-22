@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Video, VideoOff, Mic, MicOff, Phone, Users, Copy, UserPlus, Settings, Loader2 } from 'lucide-react';
+import { Video, VideoOff, Mic, MicOff, Phone, Users, Copy, UserPlus, Loader2 } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -45,13 +45,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      // { urls: 'stun:stun2.l.google.com:19302' }, // Often 2 are enough
     ],
     iceCandidatePoolSize: 10
   };
 
   const cleanup = useCallback(() => {
-    console.log('Cleanup called');
+    console.log('VideoCall: Cleanup called');
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
@@ -70,102 +69,97 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
   }, []);
   
   useEffect(() => {
-    const signalingServerUrl = process.env.NEXT_PUBLIC_SIGNALING_SERVER || 'http://localhost:3000'; // Fallback for safety
-    console.log('Attempting to connect to Signaling Server:', signalingServerUrl);
+    const signalingServerUrl = process.env.NEXT_PUBLIC_SIGNALING_SERVER;
+    if (!signalingServerUrl) {
+      console.error("VideoCall: NEXT_PUBLIC_SIGNALING_SERVER is not defined.");
+      setError("Signaling server URL is not configured.");
+      setConnectionStatus('failed');
+      return;
+    }
+    
+    console.log('VideoCall: Attempting to connect to Signaling Server:', signalingServerUrl);
 
     const newSocket = io(signalingServerUrl, {
-      path: '/api/socket', // Path to your Socket.IO server
+      path: '/socketserver', // Using the path for the external server
       transports: ['websocket'],
-      autoConnect: true, // Explicitly true
+      autoConnect: true,
     });
     
     setSocket(newSocket);
     socketRef.current = newSocket;
 
     newSocket.on('connect', () => {
-      console.log('Connected to signaling server:', newSocket.id);
+      console.log('VideoCall: Connected to signaling server:', newSocket.id, 'at', signalingServerUrl + '/socketserver');
       setConnectionStatus('connected');
       setError('');
-      if (initialRoomId) { // If an initialRoomId was passed (e.g., from chat), try to join
+      if (initialRoomId) { 
         setInputRoomId(initialRoomId.toUpperCase());
-        // Consider auto-joining if initialRoomId is present
-        // joinRoom(initialRoomId.toUpperCase()); // Or let user click join
       }
     });
 
     newSocket.on('disconnect', (reason) => {
-      console.log('Disconnected from signaling server:', reason);
+      console.log('VideoCall: Disconnected from signaling server:', reason);
       setConnectionStatus('disconnected');
-      // cleanup(); // Maybe too aggressive
-      // setIsInRoom(false);
     });
 
     newSocket.on('connect_error', (err) => {
-      console.error('Signaling server connection error:', err);
-      setError(`Failed to connect to signaling server: ${err.message}. Ensure server is running and URL is correct.`);
+      console.error('VideoCall: Signaling server connection error:', err);
+      setError(`Failed to connect to signaling server (${signalingServerUrl}/socketserver): ${err.message}.`);
       setConnectionStatus('failed');
     });
     
     newSocket.on('room-created', (data: { roomId: string }) => {
-      console.log('Room created:', data.roomId);
+      console.log('VideoCall: Room created:', data.roomId);
       setRoomId(data.roomId);
-      setInputRoomId(data.roomId); // Update input field as well
+      setInputRoomId(data.roomId); 
       setIsInitiator(true);
       setIsInRoom(true);
-      setParticipants([{id: newSocket.id}]); // Add self
+      if(newSocket.id) setParticipants([{id: newSocket.id}]);
     });
 
     newSocket.on('room-joined', (data: { roomId: string; participants?: Participant[] }) => {
-      console.log('Joined room:', data.roomId, 'Existing participants:', data.participants);
+      console.log('VideoCall: Joined room:', data.roomId, 'Existing participants:', data.participants);
       setRoomId(data.roomId);
       setIsInitiator(false);
       setIsInRoom(true);
       setParticipants(data.participants || []);
-       if (localStreamRef.current) { // If media ready, and others are in room, non-initiator might need to signal
-        // Non-initiators usually wait for an offer. If joining an empty room they became initiator.
-        // If joining a room with someone, they might trigger an offer from the other side.
-        // Or the server could coordinate who sends the offer.
-        // For now, if I'm not initiator and there are others, I might expect an offer.
-        // Or, if I'm now the second person, the initiator might send an offer.
-       }
     });
 
     newSocket.on('user-joined', (data: Participant) => {
-      console.log('User joined:', data.id);
+      console.log('VideoCall: User joined:', data.id);
       setParticipants(prev => [...prev, data]);
       toast({ title: "User Joined", description: `User ${data.id.substring(0,6)} joined the room.`});
-      // Initiator should now send an offer if the call isn't active
-      if (isInitiator && localStreamRef.current && !isCallActive) {
-        console.log('New user joined, initiator sending offer.');
+      if (isInitiator && localStreamRef.current && !isCallActive && peerConnectionRef.current) {
+        console.log('VideoCall: New user joined, initiator sending offer.');
         initiateCall();
       }
     });
 
     newSocket.on('user-left', (data: { id: string }) => {
-      console.log('User left:', data.id);
+      console.log('VideoCall: User left:', data.id);
       toast({ title: "User Left", description: `User ${data.id.substring(0,6)} left the room.`});
       setParticipants(prev => prev.filter(p => p.id !== data.id));
-      if (participants.length <= 2) { // If it was a 1-on-1 call and the other left
-        console.log('Other user left, ending call.');
-        endCall(); // Or cleanup(); to be more precise
+      if (participants.length <= 1) { 
+        console.log('VideoCall: Other user left, ending call.');
+        endCall(); 
       }
     });
 
     newSocket.on('offer', async (data: { offer: RTCSessionDescriptionInit, from: string }) => {
-      if (data.from === newSocket.id) return; // Don't handle own offers
-      console.log('Received offer from', data.from);
+      if (data.from === newSocket.id) return; 
+      console.log('VideoCall: Received offer from', data.from);
       await handleOffer(data.offer, data.from);
     });
 
     newSocket.on('answer', async (data: { answer: RTCSessionDescriptionInit, from: string }) => {
       if (data.from === newSocket.id) return;
-      console.log('Received answer from', data.from);
+      console.log('VideoCall: Received answer from', data.from);
       await handleAnswer(data.answer);
     });
 
     newSocket.on('ice-candidate', async (data: { candidate: RTCIceCandidateInit, from: string }) => {
       if (data.from === newSocket.id) return;
-      console.log('Received ICE candidate from', data.from);
+      console.log('VideoCall: Received ICE candidate from', data.from);
       await handleIceCandidate(data.candidate);
     });
 
@@ -175,19 +169,19 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
     });
 
     return () => {
-      console.log('Disconnecting socket on component unmount');
+      console.log('VideoCall: Disconnecting socket on component unmount');
       newSocket.disconnect();
-      cleanup(); // Full cleanup of WebRTC resources too
+      cleanup();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialRoomId]); // Only re-init socket if initialRoomId changes, or on mount/unmount
+  }, [initialRoomId]); // Removed cleanup from deps, keep isInitiator, isCallActive
 
   const initializeMedia = async () => {
     if (localStreamRef.current) {
-        console.log('Media already initialized.');
+        console.log('VideoCall: Media already initialized.');
         return localStreamRef.current;
     }
-    console.log('Initializing media (camera/mic)');
+    console.log('VideoCall: Initializing media (camera/mic)');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: isVideoEnabled ? { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: {ideal: 24 }} : false,
@@ -195,33 +189,33 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
       });
       
       localStreamRef.current = stream;
-      setLocalStream(stream); // For UI update
+      setLocalStream(stream); 
       
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
-      console.log('Media initialized successfully');
+      console.log('VideoCall: Media initialized successfully');
       return stream;
     } catch (err: any) {
       setError('Failed to access camera/microphone: ' + err.message);
       toast({variant: "destructive", title: "Media Error", description: 'Failed to access camera/microphone: ' + err.message});
-      console.error('getUserMedia error:', err);
+      console.error('VideoCall: getUserMedia error:', err);
       throw err;
     }
   };
 
   const createPeerConnection = useCallback(() => {
-    if (peerConnectionRef.current) {
-        console.log('PeerConnection already exists.');
+    if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
+        console.log('VideoCall: PeerConnection already exists and not closed.');
         return peerConnectionRef.current;
     }
-    console.log('Creating new PeerConnection');
+    console.log('VideoCall: Creating new PeerConnection');
     const pc = new RTCPeerConnection(rtcConfiguration);
     peerConnectionRef.current = pc;
 
     pc.onicecandidate = (event) => {
       if (event.candidate && socketRef.current && roomId) {
-        console.log('Sending ICE candidate');
+        console.log('VideoCall: Sending ICE candidate');
         socketRef.current.emit('ice-candidate', {
           candidate: event.candidate,
           roomId: roomId
@@ -230,29 +224,35 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
     };
 
     pc.ontrack = (event) => {
-      console.log('Received remote track:', event.track.kind);
+      console.log('VideoCall: Received remote track:', event.track.kind);
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = event.streams[0];
         }
-      } else { // For older browsers that use addStream
-        if (!remoteStream || remoteStream.id !== event.streams[0].id) {
+      } else { 
+        if (!remoteStream || (event.streams[0] && remoteStream.id !== event.streams[0].id)) {
             const newStream = new MediaStream();
-            event.track.onunmute = () => {
-                newStream.addTrack(event.track);
+            event.track.onunmute = () => { // Older browsers may need this
+                if(event.track) newStream.addTrack(event.track);
                 setRemoteStream(newStream);
                 if (remoteVideoRef.current) {
                     remoteVideoRef.current.srcObject = newStream;
                 }
             };
+             if(event.track) newStream.addTrack(event.track); // Add track immediately for modern browsers
+             setRemoteStream(newStream);
+             if (remoteVideoRef.current) {
+                 remoteVideoRef.current.srcObject = newStream;
+             }
         }
       }
     };
     
     pc.onconnectionstatechange = () => {
+      if (!pc) return;
       const state = pc.connectionState;
-      console.log('PeerConnection state:', state);
+      console.log('VideoCall: PeerConnection state:', state);
       setPeerConnectionStatus(state);
       
       if (state === 'connected') {
@@ -261,26 +261,24 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
         toast({title: "Call Connected", description: "You are now connected."});
       } else if (state === 'failed' || state === 'disconnected' || state === 'closed') {
         setError(state === 'failed' ? 'Connection failed.' : 'Connection lost.');
-        if(state !== 'closed') { // Avoid calling cleanup if already closed by endCall
-          cleanup(); // Simplified: end the call. Could attempt ICE restart here.
+        if(state !== 'closed') { 
+          cleanup(); 
         }
         setIsCallActive(false);
-        // Consider if setIsInRoom(false) is appropriate here
       }
     };
 
-    // Add local tracks if media stream is already available
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
-        console.log('Adding local track to PeerConnection:', track.kind);
+        console.log('VideoCall: Adding local track to PeerConnection:', track.kind);
         pc.addTrack(track, localStreamRef.current!);
       });
     } else {
-        console.warn('Local stream not available when creating peer connection. Tracks will be added later if media is initialized.');
+        console.warn('VideoCall: Local stream not available when creating peer connection. Tracks will be added later if media is initialized.');
     }
     
     return pc;
-  }, [roomId, rtcConfiguration, cleanup, toast]);
+  }, [roomId, rtcConfiguration, cleanup, toast, remoteStream]);
 
 
   const handleCreateRoom = async () => {
@@ -290,10 +288,10 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
     }
     setError('');
     try {
-      await initializeMedia(); // Ensure media is ready
+      await initializeMedia(); 
       if (!localStreamRef.current) throw new Error("Media stream not available after initialization.");
       
-      createPeerConnection(); // Create PC before creating room
+      createPeerConnection(); 
       
       const newGeneratedRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
       socketRef.current.emit('create-room', { roomId: newGeneratedRoomId });
@@ -311,12 +309,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
     }
     setError('');
     try {
-      await initializeMedia(); // Ensure media is ready
+      await initializeMedia(); 
       if (!localStreamRef.current) throw new Error("Media stream not available after initialization.");
 
-      createPeerConnection(); // Create PC before joining room
+      createPeerConnection(); 
       
-      setRoomId(roomToJoin); // Set roomId optimistically for ICE candidates etc.
+      setRoomId(roomToJoin); 
       socketRef.current.emit('join-room', { roomId: roomToJoin });
     } catch (err: any) {
       setError('Failed to join room: ' + err.message);
@@ -325,8 +323,8 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
   };
 
   const initiateCall = useCallback(async () => {
-    if (!peerConnectionRef.current) {
-      console.log('PeerConnection not found, creating one for initiating call.');
+    if (!peerConnectionRef.current || peerConnectionRef.current.signalingState === 'closed') {
+      console.log('VideoCall: PeerConnection not found or closed, creating one for initiating call.');
       createPeerConnection();
     }
     if (!peerConnectionRef.current) {
@@ -338,34 +336,33 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
         toast({variant: "destructive", title: "Media Error", description: "Local camera/mic not ready."});
         return;
     }
-     // Ensure local tracks are added if PC was created before media
     localStreamRef.current.getTracks().forEach(track => {
-        if (!peerConnectionRef.current!.getSenders().find(sender => sender.track === track)) {
-            console.log('Adding missing local track before offer:', track.kind);
+        if (peerConnectionRef.current && !peerConnectionRef.current!.getSenders().find(sender => sender.track === track)) {
+            console.log('VideoCall: Adding missing local track before offer:', track.kind);
             peerConnectionRef.current!.addTrack(track, localStreamRef.current!);
         }
     });
 
-    console.log('Initiating call: Creating offer');
+    console.log('VideoCall: Initiating call: Creating offer');
     try {
       const offer = await peerConnectionRef.current.createOffer();
       await peerConnectionRef.current.setLocalDescription(offer);
       
-      console.log('Sending offer to room:', roomId);
+      console.log('VideoCall: Sending offer to room:', roomId);
       socketRef.current?.emit('offer', {
-        offer: offer, // send the whole offer object
+        offer: offer, 
         roomId: roomId
       });
     } catch (err: any) {
       setError('Failed to create offer: ' + err.message);
-      console.error('Create offer error:', err);
+      console.error('VideoCall: Create offer error:', err);
     }
   }, [roomId, createPeerConnection]);
 
   const handleOffer = async (offerData: RTCSessionDescriptionInit, from: string) => {
-    console.log('Handling offer from:', from);
+    console.log('VideoCall: Handling offer from:', from);
      if (!localStreamRef.current) {
-      console.log('Local media not ready, initializing before handling offer.');
+      console.log('VideoCall: Local media not ready, initializing before handling offer.');
       try {
         await initializeMedia();
       } catch (e) {
@@ -373,86 +370,82 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
         return;
       }
     }
-    if (!peerConnectionRef.current) {
-      console.log('PeerConnection not found, creating one for handling offer.');
+    if (!peerConnectionRef.current || peerConnectionRef.current.signalingState === 'closed') {
+      console.log('VideoCall: PeerConnection not found or closed, creating one for handling offer.');
       createPeerConnection();
     }
     if (!peerConnectionRef.current) {
         setError('Peer connection could not be established to handle offer.');
         return;
     }
-     // Ensure local tracks are added
     localStreamRef.current!.getTracks().forEach(track => {
-        if (!peerConnectionRef.current!.getSenders().find(sender => sender.track === track)) {
-            console.log('Adding missing local track before answer:', track.kind);
+        if (peerConnectionRef.current && !peerConnectionRef.current!.getSenders().find(sender => sender.track === track)) {
+            console.log('VideoCall: Adding missing local track before answer:', track.kind);
             peerConnectionRef.current!.addTrack(track, localStreamRef.current!);
         }
     });
 
     try {
       await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(offerData));
-      console.log('Creating answer');
+      console.log('VideoCall: Creating answer');
       const answer = await peerConnectionRef.current.createAnswer();
       await peerConnectionRef.current.setLocalDescription(answer);
       
-      console.log('Sending answer to room:', roomId);
+      console.log('VideoCall: Sending answer to room:', roomId);
       socketRef.current?.emit('answer', {
-        answer: answer, // send the whole answer object
+        answer: answer, 
         roomId: roomId,
-        to: from // Though server sends to room, 'to' might be useful for direct signaling in future
+        to: from 
       });
     } catch (err: any) {
       setError('Failed to handle offer: ' + err.message);
-      console.error('Handle offer error:', err);
+      console.error('VideoCall: Handle offer error:', err);
     }
   };
 
   const handleAnswer = async (answerData: RTCSessionDescriptionInit) => {
-    console.log('Handling answer');
+    console.log('VideoCall: Handling answer');
     if (!peerConnectionRef.current) {
-      console.error('PeerConnection not available to handle answer.');
+      console.error('VideoCall: PeerConnection not available to handle answer.');
       setError('Connection error: Cannot process answer.');
       return;
     }
     try {
       await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answerData));
-      console.log('Remote description set from answer');
+      console.log('VideoCall: Remote description set from answer');
     } catch (err: any) {
       setError('Failed to handle answer: ' + err.message);
-      console.error('Handle answer error:', err);
+      console.error('VideoCall: Handle answer error:', err);
     }
   };
 
   const handleIceCandidate = async (candidateData: RTCIceCandidateInit) => {
-    console.log('Handling ICE candidate');
+    console.log('VideoCall: Handling ICE candidate');
      if (!peerConnectionRef.current) {
-      console.warn('PeerConnection not available to handle ICE candidate. Buffering might be needed.');
-      // TODO: Could buffer candidates if PC is not ready
+      console.warn('VideoCall: PeerConnection not available to handle ICE candidate. Buffering might be needed.');
       return;
     }
     try {
       await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidateData));
-      console.log('ICE candidate added');
+      console.log('VideoCall: ICE candidate added');
     } catch (err: any) {
-      // Ignore benign errors like candidate already added or for a closed PC
       if (!peerConnectionRef.current || peerConnectionRef.current.signalingState === 'closed') {
-        console.log('Ignoring ICE candidate for closed peer connection.');
+        console.log('VideoCall: Ignoring ICE candidate for closed peer connection.');
       } else {
-        console.error('Failed to add ICE candidate:', err);
-        // setError('Connection error: Problem with network candidates.');
+        console.error('VideoCall: Failed to add ICE candidate:', err);
       }
     }
   };
 
   const handleEndCall = () => {
-    console.log('User triggered end call for room:', roomId);
+    console.log('VideoCall: User triggered end call for room:', roomId);
     cleanup();
     if (socketRef.current && roomId) {
       socketRef.current.emit('leave-room', { roomId });
     }
     setIsInRoom(false);
-    setRoomId(''); // Clear current room ID
-    setInputRoomId(''); // Clear input field as well
+    setRoomId(''); 
+    setInputRoomId(''); 
     setParticipants([]);
     setIsInitiator(false);
     setPeerConnectionStatus('closed');
@@ -460,34 +453,33 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
   };
 
   const toggleVideo = async () => {
-    if (!localStreamRef.current) {
-        if (!isVideoEnabled) { // If trying to turn ON video
-            try {
-                await initializeMedia(); // This will try to get video if isVideoEnabled is true
-            } catch (e) { console.error("Error re-initializing media for video toggle",e); return; }
-        } else return; // No stream and trying to turn off, do nothing
-    }
+    let currentStream = localStreamRef.current;
+    if (!currentStream && !isVideoEnabled) { // If trying to turn ON video and no stream
+        try {
+            currentStream = await initializeMedia(); 
+        } catch (e) { console.error("VideoCall: Error re-initializing media for video toggle",e); return; }
+    } else if (!currentStream) { return; } // No stream and trying to turn off, do nothing
 
-    const videoTrack = localStreamRef.current?.getVideoTracks()[0];
+    const videoTrack = currentStream?.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.enabled = !videoTrack.enabled;
       setIsVideoEnabled(videoTrack.enabled);
       toast({ title: `Video ${videoTrack.enabled ? "On" : "Off"}`});
-    } else if (!isVideoEnabled) { // Trying to enable video but no track found (e.g. permission denied earlier)
-        setIsVideoEnabled(true); // Set desired state
-        await initializeMedia(); // Attempt to re-initialize to get video track
+    } else if (!isVideoEnabled) { 
+        setIsVideoEnabled(true); 
+        await initializeMedia(); 
     }
   };
 
   const toggleAudio = async () => {
-     if (!localStreamRef.current) {
-        if (!isAudioEnabled) { // If trying to turn ON audio
-            try {
-                await initializeMedia();
-            } catch (e) { console.error("Error re-initializing media for audio toggle",e); return; }
-        } else return;
-    }
-    const audioTrack = localStreamRef.current?.getAudioTracks()[0];
+     let currentStream = localStreamRef.current;
+     if (!currentStream && !isAudioEnabled) { 
+        try {
+            currentStream = await initializeMedia();
+        } catch (e) { console.error("VideoCall: Error re-initializing media for audio toggle",e); return; }
+    } else if (!currentStream) { return; }
+
+    const audioTrack = currentStream?.getAudioTracks()[0];
     if (audioTrack) {
       audioTrack.enabled = !audioTrack.enabled;
       setIsAudioEnabled(audioTrack.enabled);
@@ -521,20 +513,20 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
   if (!isInRoom) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
+        <Card className="w-full max-w-md shadow-xl">
           <CardHeader>
-            <CardTitle className="text-3xl font-bold text-center">Video Call Room</CardTitle>
+            <CardTitle className="text-3xl font-bold text-center text-gray-800">Video Call</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             {error && (
-              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 text-sm">
+              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded text-sm">
                 {error}
               </div>
             )}
             <Button
               onClick={handleCreateRoom}
               disabled={connectionStatus !== 'connected'}
-              className="w-full py-3"
+              className="w-full py-3 text-base"
               size="lg"
             >
               <Video className="mr-2 h-5 w-5" />
@@ -556,12 +548,12 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
                 value={inputRoomId}
                 onChange={(e) => setInputRoomId(e.target.value.toUpperCase())}
                 placeholder="Enter Room ID"
-                className="py-3 text-base"
+                className="py-3 text-base text-center"
               />
               <Button
                 onClick={handleJoinRoom}
                 disabled={connectionStatus !== 'connected' || !inputRoomId.trim()}
-                className="w-full py-3"
+                className="w-full py-3 text-base"
                 variant="secondary"
                 size="lg"
               >
@@ -579,17 +571,16 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
     );
   }
 
-  // In-call UI
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col text-white">
-      <header className="bg-gray-800 p-3 flex justify-between items-center shadow-md">
+      <header className="bg-gray-800 p-3 flex justify-between items-center shadow-md sticky top-0 z-20">
         <div className="flex items-center space-x-3">
           <h1 className="text-lg font-semibold">Room: {roomId}</h1>
           <Button
             onClick={copyRoomIdToClipboard}
             variant="ghost"
             size="sm"
-            className="text-gray-300 hover:text-white hover:bg-gray-700"
+            className="text-gray-300 hover:text-white hover:bg-gray-700 px-2 py-1"
           >
             <Copy className="mr-1.5 h-4 w-4" />
             Copy ID
@@ -606,15 +597,15 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
       </header>
 
       {error && (
-        <div className="bg-red-600 text-white px-4 py-2 text-center text-sm">
+        <div className="bg-red-600 text-white px-4 py-2 text-center text-sm sticky top-14 z-10"> {/* Make error sticky below header */}
           {error}
         </div>
       )}
 
       <main className="flex-1 p-2 md:p-4 overflow-hidden">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 md:gap-4 h-full max-h-[calc(100vh-140px)]">
-          <div className="bg-gray-800 rounded-md overflow-hidden relative shadow-lg">
-            <div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-0.5 rounded text-xs z-10">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 md:gap-4 h-full max-h-[calc(100vh-160px)] md:max-h-[calc(100vh-140px)]"> {/* Adjusted max-h for footer */}
+          <div className="bg-black rounded-md overflow-hidden relative shadow-lg border border-gray-700">
+            <div className="absolute top-2 left-2 bg-black/60 text-white px-2 py-0.5 rounded text-xs z-10">
               You {isInitiator && '(Host)'}
             </div>
             <video
@@ -622,22 +613,22 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
               autoPlay
               muted
               playsInline
-              className="w-full h-full object-cover transform scale-x-[-1]" // Mirrored local video
+              className="w-full h-full object-cover transform scale-x-[-1]" 
             />
-            {!isVideoEnabled && localStream && ( // Show VideoOff only if stream exists but video is disabled
+            {(!isVideoEnabled && localStream) && ( 
               <div className="absolute inset-0 bg-gray-800/90 flex items-center justify-center">
                 <VideoOff className="w-16 h-16 text-gray-400" />
               </div>
             )}
-             {!localStream && ( // Show loader if stream is not yet available
+             {!localStream && ( 
               <div className="absolute inset-0 bg-gray-800/90 flex items-center justify-center">
                 <Loader2 className="w-16 h-16 text-gray-400 animate-spin" />
               </div>
             )}
           </div>
 
-          <div className="bg-gray-800 rounded-md overflow-hidden relative shadow-lg">
-            <div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-0.5 rounded text-xs z-10">
+          <div className="bg-black rounded-md overflow-hidden relative shadow-lg border border-gray-700">
+            <div className="absolute top-2 left-2 bg-black/60 text-white px-2 py-0.5 rounded text-xs z-10">
               {participants.length > 1 ? `Remote (${participants.find(p=>p.id !== socket?.id)?.id.substring(0,6) || 'Participant'})` : 'Waiting...'}
             </div>
             <video
@@ -646,13 +637,13 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
               playsInline
               className="w-full h-full object-cover"
             />
-            {!remoteStream && isCallActive && (
-              <div className="absolute inset-0 bg-gray-800/90 flex items-center justify-center">
-                 <Loader2 className="w-16 h-16 text-gray-400 animate-spin" />
-                 <p className="absolute bottom-10 text-gray-400 text-sm">Connecting to peer...</p>
+            {(!remoteStream && isCallActive) && (
+              <div className="absolute inset-0 bg-gray-800/90 flex flex-col items-center justify-center text-center">
+                 <Loader2 className="w-16 h-16 text-gray-400 animate-spin mb-3" />
+                 <p className="text-gray-400 text-sm">Connecting to peer...</p>
               </div>
             )}
-             {!isCallActive && participants.length < 2 && (
+             {(!isCallActive && participants.length < 2 && isInRoom) && ( // Show waiting only if in room
                  <div className="absolute inset-0 bg-gray-800/90 flex flex-col items-center justify-center text-center">
                     <Users className="w-16 h-16 text-gray-400 mx-auto mb-3" />
                     <p className="text-gray-400 text-sm">Waiting for participant to join...</p>
@@ -663,7 +654,7 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
         </div>
       </main>
 
-      <footer className="bg-gray-800 p-3 border-t border-gray-700">
+      <footer className="bg-gray-800 p-3 border-t border-gray-700 sticky bottom-0 z-20">
         <div className="flex justify-center items-center space-x-3 md:space-x-4">
           <Button
             onClick={toggleVideo}
@@ -709,4 +700,3 @@ const VideoCall: React.FC<VideoCallProps> = ({ initialRoomId }) => {
 };
 
 export default VideoCall;
-

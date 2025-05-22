@@ -9,14 +9,12 @@ function VideoCallPageContent() {
   const searchParams = useSearchParams();
   const initialRoomId = searchParams.get('initialRoomId');
 
-  useEffect(() => {
-    // This fetch is a common pattern to "warm up" or ensure the Next.js API route 
-    // (which initializes the Socket.IO server) is running.
-    // It doesn't need to do anything with the response.
-    fetch('/api/socket').catch(error => {
-      console.warn("Attempt to warm up socket API route failed. This is often fine if socket connects otherwise.", error);
-    });
-  }, []);
+  // No longer fetching /api/socket as we are using an external signaling server
+  // useEffect(() => {
+  //   fetch('/api/socket').catch(error => {
+  //     console.warn("Attempt to warm up socket API route failed. This is often fine if socket connects otherwise.", error);
+  //   });
+  // }, []);
 
   return <VideoCall initialRoomId={initialRoomId} />;
 }
@@ -24,7 +22,7 @@ function VideoCallPageContent() {
 
 export default function VideoCallPage() {
     return (
-        <Suspense fallback={<div>Loading call details...</div>}>
+        <Suspense fallback={<div className="flex h-screen w-screen items-center justify-center"><Loader2 className="h-12 w-12 animate-spin text-primary" /> <p className="ml-3">Loading call interface...</p></div>}>
             <VideoCallPageContent />
         </Suspense>
     )
