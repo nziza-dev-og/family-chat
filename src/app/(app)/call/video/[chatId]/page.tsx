@@ -51,6 +51,11 @@ export default function VideoCallPage() {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [callStatus, setCallStatus] = useState("Initializing..."); 
+  const callStatusRef = useRef(callStatus);
+
+  useEffect(() => {
+    callStatusRef.current = callStatus;
+  }, [callStatus]);
 
   const roomDocRef = doc(db, "rooms", chatId);
   const callerCandidatesCollectionRef = collection(roomDocRef, "callerCandidates");
@@ -60,7 +65,7 @@ export default function VideoCallPage() {
   const roomUnsubscribeRef = useRef<Unsubscribe | null>(null);
 
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    const currentCallStatus = callStatus;
+    const currentCallStatus = callStatusRef.current;
     console.log(`[${chatId}] VIDEO Cleaning up. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${currentCallStatus}`);
     
     if (localStreamRef.current) {
@@ -120,7 +125,7 @@ export default function VideoCallPage() {
      if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") {
         setCallStatus("Call Ended");
     }
-  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner, addMissedCallMessage]);
+  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner]); // Removed callStatus
 
 
   useEffect(() => {
@@ -172,12 +177,13 @@ export default function VideoCallPage() {
     const pc = peerConnectionRef.current;
 
     pc.onicegatheringstatechange = () => {
-      console.log(`[${chatId}] VIDEO ICE gathering state changed: ${pc?.iceGatheringState}`);
+      if (!peerConnectionRef.current) return;
+      console.log(`[${chatId}] VIDEO ICE gathering state changed: ${peerConnectionRef.current.iceGatheringState}`);
     };
     pc.onconnectionstatechange = async () => {
       if (!peerConnectionRef.current) return;
       const currentState = peerConnectionRef.current.connectionState;
-      console.log(`[${chatId}] VIDEO Connection state change: ${currentState}, Current CallStatus: ${callStatus}`);
+      console.log(`[${chatId}] VIDEO Connection state change: ${currentState}, Current CallStatus via Ref: ${callStatusRef.current}`);
       setCallStatus(prevStatus => {
         let newStatus = prevStatus;
         if (currentState === 'connected') {
@@ -200,7 +206,7 @@ export default function VideoCallPage() {
       if (!peerConnectionRef.current) return;
       console.log(`[${chatId}] VIDEO Signaling state change: ${peerConnectionRef.current.signalingState}`);
     };
-  }, [chatId, user, roomDocRef, cleanupCall]);
+  }, [chatId, user, roomDocRef, cleanupCall]); // Removed callStatus
 
 
   const setupSignaling = useCallback(async () => {
@@ -209,15 +215,15 @@ export default function VideoCallPage() {
         return;
     }
     const pc = peerConnectionRef.current;
-    const currentCallStatus = callStatus; // Read current callStatus
-
+    
     roomUnsubscribeRef.current = onSnapshot(roomDocRef, async (snapshot) => {
       const roomData = snapshot.data();
+      const currentCallStatusSnapshot = callStatusRef.current; // Use ref for latest status
       
       if (!roomData || roomData.status === 'declined' || roomData.status === 'ended') {
-        const isEstablishing = currentCallStatus === "Creating offer..." || 
-                               currentCallStatus === "Calling partner, waiting for answer..." || 
-                               currentCallStatus === "Initializing connection...";
+        const isEstablishing = currentCallStatusSnapshot === "Creating offer..." || 
+                               currentCallStatusSnapshot === "Calling partner, waiting for answer..." || 
+                               currentCallStatusSnapshot === "Initializing connection...";
         
         const isSelfCallerTryingToEstablish = 
           user && (
@@ -226,8 +232,8 @@ export default function VideoCallPage() {
           );
 
         if (isSelfCallerTryingToEstablish) {
-          console.log(`[${chatId}] VIDEO Room snapshot: Room not ready/stale ('${roomData?.status || 'no room'}'), but current user (caller) is establishing. Skipping cleanup from snapshot. Current CallStatus: ${currentCallStatus}`);
-        } else if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") {
+          console.log(`[${chatId}] VIDEO Room snapshot: Room not ready/stale ('${roomData?.status || 'no room'}'), but current user (caller) is establishing. Skipping cleanup from snapshot. Current CallStatus: ${currentCallStatusSnapshot}`);
+        } else if (currentCallStatusSnapshot !== "Call Ended" && currentCallStatusSnapshot !== "Call Failed") {
           toast({ title: "Call Ended", description: `The call was ${roomData ? roomData.status : 'terminated'}.` });
           await cleanupCall(false);
           router.back();
@@ -340,14 +346,14 @@ export default function VideoCallPage() {
             }
             const offer = await pc.createOffer();
 
-            if (pc.signalingState === "closed") {
+            if (pc.signalingState === "closed") { // Check again after createOffer
                 console.error(`[${chatId}] VIDEO PC closed after createOffer was called.`);
                 setCallStatus("Call Failed");
                 return;
             }
             await pc.setLocalDescription(offer);
 
-            if (!pc.localDescription) {
+            if (!pc.localDescription) { // Check if localDescription is set
                 console.error(`[${chatId}] VIDEO localDescription is null after setLocalDescription.`);
                 setCallStatus("Call Failed");
                 return;
@@ -374,14 +380,16 @@ export default function VideoCallPage() {
     } else if (initialRoomData.calleeId === user.uid && initialRoomData.status === 'ringing' && !initialRoomData.answer) {
         setCallStatus("Waiting for connection setup...");
     }
-  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId]);
+  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, chatId]); // Removed callStatus
 
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) {
         return;
     }
-    if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed' || callStatus === "Call Ended" || callStatus === "Call Failed") {
-        console.log(`[${chatId}] VIDEO Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, SignalingState: ${peerConnectionRef.current?.signalingState}, Status: ${callStatus}`);
+    if ( (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') || 
+         callStatusRef.current === "Call Ended" || callStatusRef.current === "Call Failed"
+       ) {
+        console.log(`[${chatId}] VIDEO Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, SignalingState: ${peerConnectionRef.current?.signalingState}, Status via Ref: ${callStatusRef.current}`);
         return;
     }
 
@@ -481,7 +489,7 @@ export default function VideoCallPage() {
       }
     }
     await cleanupCall(true, isCallerEndingRingingCall);
-    if (callStatus !== "Call Ended" && callStatus !== "Call Failed") { 
+    if (callStatusRef.current !== "Call Ended" && callStatusRef.current !== "Call Failed") { 
         toast({ title: "Call Ended" });
     }
     router.back(); 
@@ -580,3 +588,4 @@ export default function VideoCallPage() {
     </div>
   );
 }
+
