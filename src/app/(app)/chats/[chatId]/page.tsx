@@ -13,6 +13,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, Timestamp, updateDoc, arrayUnion, where, getDocs } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Message {
   id: string;
@@ -31,6 +32,9 @@ interface ChatPartner {
   dataAiHint: string;
 }
 
+const commonEmojis = ["😀", "😂", "😍", "🤔", "👍", "❤️", "🎉", "🙏", "🔥", "😢", "😮", "👋"];
+
+
 export default function ChatPage() {
   const params = useParams();
   const router = useRouter();
@@ -43,6 +47,7 @@ export default function ChatPage() {
   const [chatPartner, setChatPartner] = useState<ChatPartner | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
 
 
   useEffect(() => {
@@ -142,6 +147,11 @@ export default function ChatPage() {
     return timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
+  const handleEmojiSelect = (emoji: string) => {
+    setNewMessage(prev => prev + emoji);
+    setIsEmojiPickerOpen(false);
+  };
+
   if (authLoading || isLoading || !chatPartner) {
     return (
       <div className="flex flex-col h-full items-center justify-center">
@@ -222,9 +232,28 @@ export default function ChatPage() {
 
       <footer className="p-3 border-t bg-card sticky bottom-0 z-10">
         <div className="flex items-center space-x-2">
-          <Button variant="ghost" size="icon">
-            <Smile className="h-6 w-6 text-muted-foreground hover:text-primary" />
-          </Button>
+          <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon">
+                <Smile className="h-6 w-6 text-muted-foreground hover:text-primary" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-2">
+              <div className="grid grid-cols-6 gap-1">
+                {commonEmojis.map((emoji) => (
+                  <Button
+                    key={emoji}
+                    variant="ghost"
+                    size="icon"
+                    className="text-xl p-1"
+                    onClick={() => handleEmojiSelect(emoji)}
+                  >
+                    {emoji}
+                  </Button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
           <Button variant="ghost" size="icon">
             <Paperclip className="h-6 w-6 text-muted-foreground hover:text-primary" />
           </Button>
