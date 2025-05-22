@@ -3,7 +3,7 @@
 
 import type { ReactNode} from 'react';
 import { useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation"; // Import usePathname
+import { useRouter, usePathname } from "next/navigation"; 
 import { useAuth } from "@/hooks/useAuth";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
@@ -18,7 +18,7 @@ import type { IncomingCallData } from '@/contexts/IncomingCallContext';
 function AppContent({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const pathname = usePathname(); // Get current pathname
+  const pathname = usePathname(); 
   const { presentIncomingCall, incomingCall, clearIncomingCall } = useIncomingCall();
 
   useEffect(() => {
@@ -31,66 +31,62 @@ function AppContent({ children }: { children: ReactNode }) {
     if (!user || !presentIncomingCall || !clearIncomingCall) return;
 
     // Listen for calls where the current user is the callee.
-    // We listen more broadly than just "ringing" to catch status changes that might indicate a missed call.
-    const callsQuery = query(
-      collection(db, "calls"),
-      where("calleeId", "==", user.uid)
+    const roomsQuery = query(
+      collection(db, "rooms"), // Listen to 'rooms' collection
+      where("calleeId", "==", user.uid),
+      // where("status", "==", "ringing") // Initial filter, but also need to handle changes
     );
 
-    const unsubscribe = onSnapshot(callsQuery, async (snapshot) => {
+    const unsubscribe = onSnapshot(roomsQuery, async (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
-        const callDocData = change.doc.data() as DocumentData & { 
+        const roomDocData = change.doc.data() as DocumentData & { 
             callerId: string; 
             calleeId: string; 
             callType: 'audio' | 'video'; 
             status: string;
+            offer?: any; // Offer should exist for ringing
         };
-        const callDocId = change.doc.id; // This is also the chatId for 1-on-1
+        const roomDocId = change.doc.id; // This is also the chatId for 1-on-1
 
         if (change.type === "added" || change.type === "modified") {
-          if (callDocData.status === 'ringing') {
-            // If already in a call screen for this chat, don't show dialog
-            if (pathname?.includes(`/call/${callDocData.callType}/${callDocId}`)) {
-                if (incomingCall && incomingCall.callDocId === callDocId) clearIncomingCall('navigating_away');
+          if (roomDocData.status === 'ringing' && roomDocData.offer) {
+            if (pathname?.includes(`/call/${roomDocData.callType}/${roomDocId}`)) {
+                if (incomingCall && incomingCall.callDocId === roomDocId) clearIncomingCall('navigating_away');
                 return;
             }
-            // Only present if not already showing this call, or if it's a new ringing call
-            if (!incomingCall || incomingCall.callDocId !== callDocId) {
-              const callerId = callDocData.callerId;
+            if (!incomingCall || incomingCall.callDocId !== roomDocId) {
+              const callerId = roomDocData.callerId;
               if (callerId) {
                 const userDocSnap = await getDoc(doc(db, "users", callerId));
                 if (userDocSnap.exists()) {
                   const callerData = userDocSnap.data() as ChatUser;
                   presentIncomingCall({
-                    chatId: callDocId, 
+                    chatId: roomDocId, 
                     caller: {
                       uid: callerData.uid,
                       displayName: callerData.displayName || "Unknown Caller",
                       photoURL: callerData.photoURL,
                     },
-                    callType: callDocData.callType as 'audio' | 'video',
-                    callDocId: callDocId,
+                    callType: roomDocData.callType as 'audio' | 'video',
+                    callDocId: roomDocId,
                   });
                 }
               }
             }
-          } else if (incomingCall && incomingCall.callDocId === callDocId) {
-            // The call was ringing for us, but its status changed (e.g., ended, declined by caller)
-            if (callDocData.status === 'ended' || callDocData.status === 'declined') {
+          } else if (incomingCall && incomingCall.callDocId === roomDocId) {
+            if (roomDocData.status === 'ended' || roomDocData.status === 'declined') {
               clearIncomingCall('call_ended_by_other', {
-                  chatId: callDocId,
-                  callType: callDocData.callType,
-                  callerId: callDocData.callerId,
+                  chatId: roomDocId,
+                  callType: roomDocData.callType,
+                  callerId: roomDocData.callerId,
                   calleeId: user.uid
               });
-            } else if (callDocData.status === 'answered' || callDocData.status === 'active') {
-              // If it was answered/became active (possibly by this user on another device, or race condition)
+            } else if (roomDocData.status === 'answered' || roomDocData.status === 'active') {
               clearIncomingCall('answered');
             }
           }
         } else if (change.type === "removed") {
            if (incomingCall && incomingCall.callDocId === change.doc.id) {
-            // Call document was removed while ringing for us, treat as missed.
             clearIncomingCall('call_ended_by_other', {
                 chatId: incomingCall.chatId,
                 callType: incomingCall.callType,
@@ -101,30 +97,32 @@ function AppContent({ children }: { children: ReactNode }) {
         }
       });
 
-      // After processing changes, check if the current incomingCall (if any) still exists and is ringing
       if (incomingCall) {
-        const currentCallDocSnap = await getDoc(doc(db, "calls", incomingCall.callDocId));
+        const currentCallDocSnap = await getDoc(doc(db, "rooms", incomingCall.callDocId));
         if (!currentCallDocSnap.exists() || 
             currentCallDocSnap.data()?.status !== 'ringing' || 
             currentCallDocSnap.data()?.calleeId !== user.uid) {
-          // If the call being presented no longer exists or is not ringing for this user,
-          // and it wasn't cleared by the docChanges loop (e.g. due to 'call_ended_by_other' already)
-          // we need to make sure it's cleared. The reason here is more generic if not already handled.
-          // This might be redundant if docChanges is comprehensive, but acts as a safeguard.
-          if (currentCallDocSnap.data()?.status === 'ended' || currentCallDocSnap.data()?.status === 'declined'){
-             clearIncomingCall('call_ended_by_other', {
-                chatId: incomingCall.chatId,
-                callType: incomingCall.callType,
-                callerId: incomingCall.caller.uid,
-                calleeId: user.uid
-            });
-          } else {
-             clearIncomingCall(); // General clear if state is inconsistent
-          }
+            if (currentCallDocSnap.data()?.status === 'ended' || currentCallDocSnap.data()?.status === 'declined'){
+                clearIncomingCall('call_ended_by_other', {
+                    chatId: incomingCall.chatId,
+                    callType: incomingCall.callType,
+                    callerId: incomingCall.caller.uid,
+                    calleeId: user.uid
+                });
+            } else if (currentCallDocSnap.data()?.status === 'answered' || currentCallDocSnap.data()?.status === 'active') {
+                clearIncomingCall('answered');
+            } else {
+                // If the call is no longer ringing for this user for other reasons, clear the dialog.
+                // This is a safeguard against the dialog sticking if the document state becomes inconsistent
+                // with an active ringing presentation.
+                const presentedCallData = incomingCall; // copy to avoid race condition if incomingCall changes during async
+                if(presentedCallData && presentedCallData.callDocId === currentCallDocSnap.id){
+                    console.log("Clearing stale incoming call dialog for room:", presentedCallData.callDocId);
+                    clearIncomingCall(); 
+                }
+            }
         }
       }
-
-
     });
 
     return () => unsubscribe();

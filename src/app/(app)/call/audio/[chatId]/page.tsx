@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ArrowLeft, Mic, MicOff, PhoneOff, Loader2, ShieldAlert } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase";
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where, Timestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, addDoc, deleteDoc, getDocs, writeBatch, query, where, Timestamp, serverTimestamp, Unsubscribe } from "firebase/firestore";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuth } from "@/hooks/useAuth";
 import { useIncomingCall } from "@/contexts/IncomingCallContext";
@@ -26,6 +26,7 @@ const ICE_SERVERS = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export default function AudioCallPage() {
@@ -39,8 +40,8 @@ export default function AudioCallPage() {
   const [chatPartner, setChatPartner] = useState<ChatPartner | null>(null);
   const [isLoadingPartner, setIsLoadingPartner] = useState(true);
   
-  const localAudioRef = useRef<HTMLAudioElement>(null); 
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const localAudioRef = useRef<HTMLAudioElement>(null); // For local audio playback (muted)
+  const remoteAudioRef = useRef<HTMLAudioElement>(null); // For remote audio playback
 
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -50,17 +51,17 @@ export default function AudioCallPage() {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const [callStatus, setCallStatus] = useState("Initializing...");
 
-  const callDocRef = doc(db, "calls", chatId);
-  const iceCandidateCollectionRef = collection(callDocRef, "iceCandidates");
+  const roomDocRef = doc(db, "rooms", chatId);
+  const callerCandidatesCollectionRef = collection(roomDocRef, "callerCandidates");
+  const calleeCandidatesCollectionRef = collection(roomDocRef, "calleeCandidates");
   
-  const iceCandidateListenersUnsubscribeRef = useRef<(() => void) | null>(null);
-  const callDocUnsubscribeRef = useRef<(() => void) | null>(null);
-
+  const iceListenersUnsubscribeRef = useRef<Unsubscribe[]>([]);
+  const roomUnsubscribeRef = useRef<Unsubscribe | null>(null);
+  
   const cleanupCall = useCallback(async (updateFirestoreStatus = true, isCallerInitiatedEnd = false) => {
-    console.log(`[${chatId}] Cleaning up audio call. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${callStatus}`);
+    const currentCallStatus = callStatus;
+    console.log(`[${chatId}] AUDIO Cleaning up. Update Firestore: ${updateFirestoreStatus}, CallerEnd: ${isCallerInitiatedEnd}, CurrentStatus: ${currentCallStatus}`);
     
-    const currentCallStatus = callStatus; // Capture current status for conditions
-
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
@@ -73,42 +74,47 @@ export default function AudioCallPage() {
       peerConnectionRef.current = null;
     }
     
-    if (iceCandidateListenersUnsubscribeRef.current) {
-        iceCandidateListenersUnsubscribeRef.current();
-        iceCandidateListenersUnsubscribeRef.current = null;
-    }
-    if (callDocUnsubscribeRef.current) {
-        callDocUnsubscribeRef.current();
-        callDocUnsubscribeRef.current = null;
+    iceListenersUnsubscribeRef.current.forEach(unsubscribe => unsubscribe());
+    iceListenersUnsubscribeRef.current = [];
+    if (roomUnsubscribeRef.current) {
+        roomUnsubscribeRef.current();
+        roomUnsubscribeRef.current = null;
     }
 
     if (updateFirestoreStatus && user) {
         try {
-            const callSnap = await getDoc(callDocRef);
-            if (callSnap.exists()) {
-                const callData = callSnap.data();
-                 if (callData.callerId === user.uid || callData.calleeId === user.uid) {
-                    if (isCallerInitiatedEnd && callData.callerId === user.uid && callData.status === 'ringing' && chatPartner) {
+            const roomSnap = await getDoc(roomDocRef);
+            if (roomSnap.exists()) {
+                const roomData = roomSnap.data();
+                 if (roomData.callerId === user.uid || roomData.calleeId === user.uid) {
+                    if (isCallerInitiatedEnd && roomData.callerId === user.uid && roomData.status === 'ringing' && chatPartner) {
                         await addMissedCallMessage(chatId, 'audio', user.uid, chatPartner.uid);
                     }
-                    if (callData.status !== 'ended' && callData.status !== 'declined') {
-                        await updateDoc(callDocRef, { status: "ended", offer: null, answer: null, updatedAt: Timestamp.now() });
+                    if (roomData.status !== 'ended' && roomData.status !== 'declined') {
+                        await updateDoc(roomDocRef, { 
+                            status: "ended", 
+                            offer: null, 
+                            answer: null, 
+                            updatedAt: serverTimestamp() 
+                        });
                     }
                     
-                    const iceCandidatesSnap = await getDocs(iceCandidateCollectionRef);
+                    const callerCandidatesSnap = await getDocs(callerCandidatesCollectionRef);
+                    const calleeCandidatesSnap = await getDocs(calleeCandidatesCollectionRef);
                     const batch = writeBatch(db);
-                    iceCandidatesSnap.forEach(doc => batch.delete(doc.ref));
+                    callerCandidatesSnap.forEach(doc => batch.delete(doc.ref));
+                    calleeCandidatesSnap.forEach(doc => batch.delete(doc.ref));
                     await batch.commit();
                 }
             }
         } catch (error) {
-            console.warn("Error during call document cleanup:", error);
+            console.warn("Error during room document cleanup (audio):", error);
         }
     }
-    if (currentCallStatus !== "Call Ended") { 
+     if (currentCallStatus !== "Call Ended" && currentCallStatus !== "Call Failed") { 
       setCallStatus("Call Ended");
     }
-  }, [chatId, callDocRef, iceCandidateCollectionRef, user, chatPartner, toast, router]); 
+  }, [chatId, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, user, chatPartner, callStatus]); 
 
 
   useEffect(() => {
@@ -146,7 +152,7 @@ export default function AudioCallPage() {
           router.replace("/chats");
         }
       } catch (error) {
-        console.error("Error fetching chat partner details:", error);
+        console.error("Error fetching chat partner details (audio):", error);
         toast({ title: "Error", description: "Could not load partner details.", variant: "destructive" });
       } finally {
         setIsLoadingPartner(false);
@@ -155,14 +161,48 @@ export default function AudioCallPage() {
     fetchChatPartnerDetails();
   }, [chatId, user, router, toast]);
 
+  const registerPeerConnectionListeners = useCallback(() => {
+    if (!peerConnectionRef.current) return;
+    peerConnectionRef.current.addEventListener('icegatheringstatechange', () => {
+      console.log(`[${chatId}] AUDIO ICE gathering state changed: ${peerConnectionRef.current?.iceGatheringState}`);
+    });
+    peerConnectionRef.current.addEventListener('connectionstatechange', () => {
+      const currentState = peerConnectionRef.current?.connectionState;
+      console.log(`[${chatId}] AUDIO Connection state change: ${currentState}`);
+       setCallStatus(prevStatus => {
+        let newStatus = prevStatus;
+        if (currentState === 'connected') {
+          newStatus = "Connected";
+           if (user) {
+             updateDoc(roomDocRef, { status: "active", updatedAt: serverTimestamp() }).catch(e => console.warn("Error setting room to active:", e));
+          }
+        } else if (currentState === 'disconnected') {
+          newStatus = "Reconnecting...";
+        } else if (currentState === 'failed') {
+          newStatus = "Call Failed";
+          cleanupCall(true, false);
+        } else if (currentState === 'closed') {
+          newStatus = "Call Ended";
+          // cleanupCall might have already been called by user action or other failure
+          // if (prevStatus !== "Call Ended" && prevStatus !== "Call Failed") cleanupCall(true, false);
+        }
+        return newStatus;
+      });
+    });
+    peerConnectionRef.current.addEventListener('signalingstatechange', () => {
+      console.log(`[${chatId}] AUDIO Signaling state change: ${peerConnectionRef.current?.signalingState}`);
+    });
+  }, [chatId, user, roomDocRef, cleanupCall]);
+
+
   const setupSignaling = useCallback(async () => {
     if (!user || !peerConnectionRef.current || !chatPartner) return;
     const pc = peerConnectionRef.current;
 
-    callDocUnsubscribeRef.current = onSnapshot(callDocRef, async (snapshot) => {
-      const data = snapshot.data();
-      if (!data) {
-        if (callStatus !== "Call Ended") {
+    roomUnsubscribeRef.current = onSnapshot(roomDocRef, async (snapshot) => {
+      const roomData = snapshot.data();
+      if (!roomData) {
+         if (callStatus !== "Call Ended" && callStatus !== "Call Failed") {
            toast({ title: "Call Ended", description: "The call was terminated." });
            await cleanupCall(false); 
            router.back();
@@ -170,26 +210,26 @@ export default function AudioCallPage() {
         return;
       }
 
-      if (data.status === 'declined' || data.status === 'ended') {
-        if (callStatus !== "Call Ended") {
-            toast({ title: "Call Ended", description: `The call was ${data.status}.` });
+      if (roomData.status === 'declined' || roomData.status === 'ended') {
+        if (callStatus !== "Call Ended" && callStatus !== "Call Failed") {
+            toast({ title: "Call Ended", description: `The call was ${roomData.status}.` });
             await cleanupCall(false); 
             router.back();
         }
         return;
       }
 
-      if (data.offer && data.calleeId === user.uid && !pc.currentRemoteDescription && data.status === 'ringing') {
+      if (roomData.offer && roomData.calleeId === user.uid && !pc.currentRemoteDescription && roomData.status === 'ringing') {
         setCallStatus("Offer received, creating answer...");
         try {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            await pc.setRemoteDescription(new RTCSessionDescription(roomData.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             if (pc.localDescription) { 
-                await updateDoc(callDocRef, { 
+                await updateDoc(roomDocRef, { 
                     answer: pc.localDescription.toJSON(), 
                     status: "answered",
-                    updatedAt: Timestamp.now()
+                    updatedAt: serverTimestamp()
                 });
             }
             setCallStatus("Answer sent, connecting...");
@@ -201,11 +241,11 @@ export default function AudioCallPage() {
         }
       }
 
-      if (data.answer && data.callerId === user.uid && pc.signalingState === "have-local-offer") {
+      if (roomData.answer && roomData.callerId === user.uid && pc.signalingState === "have-local-offer") {
         if (!pc.currentRemoteDescription) {
             setCallStatus("Answer received, connecting...");
             try {
-                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                await pc.setRemoteDescription(new RTCSessionDescription(roomData.answer));
             } catch (e) {
                 console.error("Error setting remote description from answer (audio):", e);
                 setCallStatus("Connection error");
@@ -216,39 +256,39 @@ export default function AudioCallPage() {
       }
     });
 
-    const qIceCandidates = query(
-      iceCandidateCollectionRef,
-      where("recipientId", "==", user.uid)
-    );
-    iceCandidateListenersUnsubscribeRef.current = onSnapshot(qIceCandidates, (snapshot) => {
+    const ourRoleIsCaller = (await getDoc(roomDocRef)).data()?.callerId === user.uid;
+    const candidatesToListen = ourRoleIsCaller ? calleeCandidatesCollectionRef : callerCandidatesCollectionRef;
+
+    const iceUnsubscribe = onSnapshot(candidatesToListen, (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
         if (change.type === "added") {
            if (pc.signalingState !== "closed" && change.doc.data().candidate) {
              try {
                 await pc.addIceCandidate(new RTCIceCandidate(change.doc.data().candidate));
              } catch (e) {
-                console.error("Error adding received ICE candidate", e);
+                console.error("Error adding received ICE candidate (audio)", e);
              }
            }
         }
       });
     });
+    iceListenersUnsubscribeRef.current.push(iceUnsubscribe);
 
-    const callSnap = await getDoc(callDocRef);
-    if (!callSnap.exists() || (callSnap.data()?.callerId !== user.uid && callSnap.data()?.calleeId !== user.uid && callSnap.data()?.status !== 'ringing')) {
+    const roomSnap = await getDoc(roomDocRef);
+    if (!roomSnap.exists() || (roomSnap.data()?.calleeId !== user.uid && roomSnap.data()?.callerId !== user.uid) || roomSnap.data()?.status === 'ended' || roomSnap.data()?.status === 'declined') {
         setCallStatus("Creating offer...");
         try {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             if (pc.localDescription) { 
-                await setDoc(callDocRef, { 
+                await setDoc(roomDocRef, { 
                     offer: pc.localDescription.toJSON(),
                     callerId: user.uid,
                     calleeId: chatPartner.uid,
                     callType: 'audio',
                     status: 'ringing',
-                    createdAt: Timestamp.now(),
-                    updatedAt: Timestamp.now(),
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
                 });
             }
             setCallStatus("Calling partner, waiting for answer...");
@@ -258,20 +298,19 @@ export default function AudioCallPage() {
             toast({title: "Call Error", description: "Could not initiate the call.", variant: "destructive"});
             await cleanupCall(true, false);
         }
-    } else if (callSnap.exists() && callSnap.data()?.callerId === user.uid && !callSnap.data()?.answer && callSnap.data()?.status === 'ringing') {
+    } else if (roomSnap.exists() && roomSnap.data()?.callerId === user.uid && !roomSnap.data()?.answer && roomSnap.data()?.status === 'ringing') {
         setCallStatus("Calling partner, waiting for answer...");
-    } else if (callSnap.exists() && callSnap.data()?.calleeId === user.uid && callSnap.data()?.status === 'ringing' && !callSnap.data()?.answer) {
+    } else if (roomSnap.exists() && roomSnap.data()?.calleeId === user.uid && roomSnap.data()?.status === 'ringing' && !roomSnap.data()?.answer) {
         setCallStatus("Waiting for connection setup...");
     }
-  }, [user, chatPartner, callDocRef, iceCandidateCollectionRef, router, toast, cleanupCall]);
+  }, [user, chatPartner, roomDocRef, callerCandidatesCollectionRef, calleeCandidatesCollectionRef, router, toast, cleanupCall, callStatus]);
 
-  // Main effect for initializing the call
   useEffect(() => {
     if (authLoading || isLoadingPartner || !user || !chatPartner) {
         return;
     }
-    if (peerConnectionRef.current || callStatus === "Call Ended") {
-        console.log(`[${chatId}] Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, Status: ${callStatus}`);
+    if (peerConnectionRef.current || callStatus === "Call Ended" || callStatus === "Call Failed") {
+        console.log(`[${chatId}] AUDIO Call already initialized or ended, skipping. PC: ${!!peerConnectionRef.current}, Status: ${callStatus}`);
         return;
     }
 
@@ -284,7 +323,7 @@ export default function AudioCallPage() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         localStreamRef.current = stream;
-        if (localAudioRef.current) {
+        if (localAudioRef.current) { // For local feedback if needed, usually muted
           localAudioRef.current.srcObject = stream; 
         }
         setHasPermission(true);
@@ -292,27 +331,7 @@ export default function AudioCallPage() {
 
         const pc = new RTCPeerConnection(ICE_SERVERS);
         peerConnectionRef.current = pc;
-
-        pc.onconnectionstatechange = () => {
-          const currentPCState = pc.connectionState;
-          setCallStatus(prevStatus => {
-            console.log(`[${chatId}] Peer connection state: ${currentPCState}. Current displayed status: ${prevStatus}`);
-            let newStatus = prevStatus;
-            if (currentPCState === 'connected') {
-              newStatus = "Connected";
-              if (user) {
-                 updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
-              }
-            } else if (currentPCState === 'disconnected') {
-              newStatus = "Reconnecting...";
-            } else if (currentPCState === 'failed' || currentPCState === 'closed') {
-              console.log(`[${chatId}] Connection failed or closed. Cleaning up.`);
-              cleanupCall(true, false); 
-              newStatus = prevStatus === "Call Ended" ? prevStatus : "Call Failed";
-            }
-            return newStatus;
-          });
-        };
+        registerPeerConnectionListeners();
         
         localStreamRef.current.getTracks().forEach(track => {
           if(localStreamRef.current && peerConnectionRef.current) peerConnectionRef.current.addTrack(track, localStreamRef.current);
@@ -327,29 +346,21 @@ export default function AudioCallPage() {
             if (remoteStreamRef.current) remoteStreamRef.current.addTrack(track);
           });
           if (remoteAudioRef.current) remoteAudioRef.current.play().catch(e => console.error("Error playing remote audio:", e));
-          // Set status to connected usually handled by onconnectionstatechange, but can be set here as a fallback
-          if (callStatus !== "Connected" && callStatus !== "Call Ended") {
-             setCallStatus("Connected");
-             if (user) {
-                updateDoc(callDocRef, { status: "active", updatedAt: Timestamp.now() }).catch(console.error);
-             }
-          }
         };
 
-        pc.onicecandidate = event => {
+        pc.onicecandidate = async event => {
           if (event.candidate && user && chatPartner && peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'closed') {
-            addDoc(iceCandidateCollectionRef, {
-              candidate: event.candidate.toJSON(),
-              senderId: user.uid,
-              recipientId: chatPartner.uid,
-            });
+            const roomData = (await getDoc(roomDocRef)).data();
+            const amICaller = roomData?.callerId === user.uid;
+            const targetCollection = amICaller ? callerCandidatesCollectionRef : calleeCandidatesCollectionRef;
+            await addDoc(targetCollection, { candidate: event.candidate.toJSON() });
           }
         };
         
         await setupSignaling();
 
       } catch (error) {
-        console.error("Error accessing microphone:", error);
+        console.error("Error accessing microphone (audio):", error);
         setHasPermission(false);
         setCallStatus("Permission Denied");
         toast({
@@ -358,24 +369,24 @@ export default function AudioCallPage() {
           description: "Please enable microphone permission in your browser settings.",
           duration: 5000,
         });
-        await cleanupCall(true, false); // Ensure cleanup if permissions fail
+        await cleanupCall(true, false);
       }
     };
 
     initialize();
     
     return () => {
-      console.log(`[${chatId}] Unmounting AudioCallPage. Visibility: ${document.visibilityState}`);
+      console.log(`[${chatId}] AUDIO Unmounting AudioCallPage. Visibility: ${document.visibilityState}`);
       if (document.visibilityState === 'hidden') {
-        console.log(`[${chatId}] Call page hidden, cleaning up local resources only.`);
+        console.log(`[${chatId}] AUDIO Page hidden, cleaning up local resources only.`);
         cleanupCall(false, false); 
       } else {
-        console.log(`[${chatId}] Call page unmounting/closing, full cleanup.`);
+        console.log(`[${chatId}] AUDIO Page unmounting/closing, full cleanup.`);
         cleanupCall(true, false);
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall, cleanupCall, setupSignaling]);
+  }, [user, authLoading, isLoadingPartner, chatPartner, chatId, clearIncomingCall, cleanupCall, setupSignaling, registerPeerConnectionListeners]);
 
 
   const toggleMic = () => {
@@ -391,16 +402,16 @@ export default function AudioCallPage() {
   const handleEndCall = async () => {
     let isCallerEndingRingingCall = false;
     if (user && chatPartner && peerConnectionRef.current) { 
-      const callSnap = await getDoc(callDocRef);
-      if (callSnap.exists()) {
-        const callData = callSnap.data();
-        if (callData.callerId === user.uid && callData.status === 'ringing') {
+      const roomSnap = await getDoc(roomDocRef);
+      if (roomSnap.exists()) {
+        const roomData = roomSnap.data();
+        if (roomData.callerId === user.uid && roomData.status === 'ringing') {
           isCallerEndingRingingCall = true; 
         }
       }
     }
     await cleanupCall(true, isCallerEndingRingingCall);
-    if (callStatus !== "Call Ended") { 
+    if (callStatus !== "Call Ended" && callStatus !== "Call Failed") { 
         toast({ title: "Call Ended" });
     }
     router.back();
@@ -458,7 +469,7 @@ export default function AudioCallPage() {
         <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
 
         <p className="text-lg">Audio call with {chatPartner.name}</p>
-         {callStatus !== "Connected" && callStatus !== "Call Ended" && callStatus !== "Reconnecting..." && (
+         {callStatus !== "Connected" && callStatus !== "Call Ended" && callStatus !== "Reconnecting..." && callStatus !== "Call Failed" && (
            <p className="text-sm text-gray-400">{callStatus === "Initializing..." || callStatus === "Requesting permissions..." || callStatus === "Initializing connection..." ? "Setting up..." : "Attempting to connect..."}</p>
         )}
         {callStatus === "Reconnecting..." && (
