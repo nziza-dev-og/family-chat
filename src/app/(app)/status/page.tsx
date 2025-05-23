@@ -18,7 +18,7 @@ import { getFriends, type ChatUser } from "@/lib/chatActions";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils"; 
-import { Progress } from "@/components/ui/progress"; // Import Progress
+import { Progress } from "@/components/ui/progress";
 
 export default function StatusPage() {
   const { user, loading: authLoading } = useAuth();
@@ -141,7 +141,14 @@ export default function StatusPage() {
   const handleUrlInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     setStatusMediaUrlInput(event.target.value);
     setSelectedStatusFile(null); 
-    setSelectedMediaType(null);
+    // Basic check for media type from URL extension for UI feedback
+    if (event.target.value.match(/\.(jpeg|jpg|gif|png|webp|avif)$/i) != null) {
+        setSelectedMediaType('image'); 
+    } else if (event.target.value.match(/\.(mp4|webm|ogg|mov)$/i) != null) {
+        setSelectedMediaType('video');
+    } else {
+        setSelectedMediaType(null);
+    }
     if(statusFileInputRef.current) statusFileInputRef.current.value = "";
   };
 
@@ -168,19 +175,21 @@ export default function StatusPage() {
         toast({ title: "Invalid URL", description: "URL must start with http:// or https://.", variant: "destructive" });
         return;
       }
-      // Basic check for media type from URL extension
       if (statusMediaUrlInput.match(/\.(jpeg|jpg|gif|png|webp|avif)$/i) != null) {
          finalMediaType = 'image'; 
       } else if (statusMediaUrlInput.match(/\.(mp4|webm|ogg|mov)$/i) != null) {
          finalMediaType = 'video';
       } else {
-         toast({ title: "Unsupported URL", description: "Only direct image/video URLs are supported.", variant: "destructive" });
+         toast({ title: "Unsupported URL", description: "Only direct image/video URLs are supported. Ensure the URL ends with a valid extension.", variant: "destructive" });
          return;
       }
       mediaToPost = statusMediaUrlInput.trim();
     }
 
-    if (!mediaToPost || !finalMediaType) return;
+    if (!mediaToPost || !finalMediaType) {
+      toast({ title: "Error", description: "Media or media type is missing.", variant: "destructive" });
+      return;
+    }
 
     setIsPostingStatus(true);
     try {
@@ -220,6 +229,8 @@ export default function StatusPage() {
         videoStatusRef.current.pause();
     }
     setViewingStatus(null);
+    setCurrentStatusIndex(0); // Reset index when closing
+    setVideoProgress(0);
   }, []);
 
 
@@ -253,6 +264,12 @@ export default function StatusPage() {
     if (viewingStatus && viewingStatus.statuses.length > 0) {
         const current = viewingStatus.statuses[currentStatusIndex];
         
+        if (!current) { // Guard for undefined current status item
+            console.warn("StatusPage: current status item is undefined within timeout/video effect. This might happen if currentStatusIndex is temporarily out of sync. Closing viewer as a precaution.");
+            closeStatusViewer(); 
+            return;
+        }
+
         if (current.type === 'video') {
             if (videoStatusRef.current) {
                 videoStatusRef.current.currentTime = 0;
@@ -262,10 +279,8 @@ export default function StatusPage() {
                     videoStatusRef.current.pause();
                 }
             }
-            // Duration will be handled by 'onEnded' or manual navigation for videos.
-            // No automatic timeout for videos unless they fail to play or load.
         } else { // Image or Text
-            const duration = 5000; // 5 seconds for images/text
+            const duration = 5000; 
             statusTimeoutRef.current = setTimeout(() => {
                 nextStatus();
             }, duration);
@@ -276,14 +291,19 @@ export default function StatusPage() {
             clearTimeout(statusTimeoutRef.current);
         }
     };
-  }, [viewingStatus, currentStatusIndex, nextStatus, isVideoStatusPlaying]);
+  }, [viewingStatus, currentStatusIndex, nextStatus, isVideoStatusPlaying, closeStatusViewer]);
 
   useEffect(() => {
     const videoElement = videoStatusRef.current;
     if (!videoElement) return;
 
+    const currentStatusForVideoEffect = viewingStatus?.statuses[currentStatusIndex];
+    if (!currentStatusForVideoEffect || currentStatusForVideoEffect.type !== 'video') {
+        return;
+    }
+
     const handleTimeUpdate = () => {
-      if (videoElement.duration) {
+      if (videoElement.duration && !isNaN(videoElement.duration)) {
         setVideoProgress((videoElement.currentTime / videoElement.duration) * 100);
       }
     };
@@ -315,7 +335,7 @@ export default function StatusPage() {
   const toggleVideoPlayPause = () => {
     if (videoStatusRef.current) {
       if (videoStatusRef.current.paused || videoStatusRef.current.ended) {
-        videoStatusRef.current.play();
+        videoStatusRef.current.play().catch(e => console.error("Error re-playing video:", e));
         setIsVideoStatusPlaying(true);
       } else {
         videoStatusRef.current.pause();
@@ -342,7 +362,7 @@ export default function StatusPage() {
         <ScrollArea className="flex-1">
           <div className="p-3 md:p-4">
             <Card 
-              className="mb-3 shadow-sm hover:bg-secondary/30 cursor-pointer transition-colors rounded-lg"
+              className="mb-3 shadow-sm hover:bg-secondary/30 cursor-pointer transition-colors rounded-lg border border-border"
               onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName || "Me", userAvatar: user.photoURL, dataAiHint: "person portrait" })}
             >
               <CardContent className="p-3 flex items-center space-x-3.5">
@@ -377,7 +397,7 @@ export default function StatusPage() {
                 <h3 className="px-1 text-sm font-semibold text-muted-foreground mb-1.5">Recent updates</h3>
                 {recentUpdates.map((group) => (
                   <Card key={group.userId} 
-                    className="mb-2 shadow-sm hover:bg-secondary/30 cursor-pointer transition-colors rounded-lg"
+                    className="mb-2 shadow-sm hover:bg-secondary/30 cursor-pointer transition-colors rounded-lg border-border"
                     onClick={() => openStatusViewer(group)}
                   >
                     <CardContent className="p-3 flex items-center space-x-3.5">
@@ -469,6 +489,7 @@ export default function StatusPage() {
                           onChange={handleUrlInputChange}
                            className="mt-1"
                         />
+                        {statusMediaUrlInput && <p className="text-sm text-muted-foreground mt-2">Type: {selectedMediaType || 'Detecting...'}</p>}
                        </div>
                     </TabsContent>
                   </Tabs>
@@ -499,12 +520,12 @@ export default function StatusPage() {
             onClick={(e) => { e.stopPropagation(); /* Backdrop click handled by nav areas */}} 
         >
             {/* Progress Bars */}
-            {viewingStatus.statuses.length > 1 && (
+            {viewingStatus.statuses.length > 0 && ( // Changed from >1 to >0 to show even for single status
               <div className="flex space-x-1 w-full max-w-2xl mx-auto pt-3 px-2 md:pt-4 md:px-4 z-[52]">
                 {viewingStatus.statuses.map((_, idx) => (
                     <div key={idx} className="h-1 flex-1 bg-white/30 rounded-full overflow-hidden relative">
                         {idx < currentStatusIndex && <div className="h-full bg-white w-full absolute top-0 left-0" />}
-                        {idx === currentStatusIndex && (
+                        {idx === currentStatusIndex && currentViewedStatus && ( // Added null check for currentViewedStatus
                             currentViewedStatus.type === 'video' ?
                             <Progress value={videoProgress} className="h-full w-full [&>div]:bg-white bg-transparent" />
                             :
@@ -538,11 +559,11 @@ export default function StatusPage() {
                     </Avatar>
                     <div>
                         <p className="text-white font-semibold text-sm">{viewingStatus.userName}</p>
-                        <p className="text-xs text-gray-300">{formatStatusTimestamp(currentViewedStatus.createdAt.toDate())}</p>
+                        {currentViewedStatus && <p className="text-xs text-gray-300">{formatStatusTimestamp(currentViewedStatus.createdAt.toDate())}</p>}
                     </div>
                 </div>
                 <div className="flex items-center gap-1">
-                    {currentViewedStatus.type === 'video' && videoStatusRef.current && (
+                    {currentViewedStatus && currentViewedStatus.type === 'video' && videoStatusRef.current && (
                         <>
                         <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 rounded-full h-9 w-9" onClick={(e) => {e.stopPropagation(); toggleVideoPlayPause();}}>
                             {isVideoStatusPlaying ? <Pause className="h-4 w-4"/> : <Play className="h-4 w-4"/>}
@@ -559,47 +580,48 @@ export default function StatusPage() {
             </div>
             
             {/* Content Area */}
-            <div className="relative w-full flex-1 flex items-center justify-center overflow-hidden my-2" onClick={(e) => e.stopPropagation()}>
-                {currentViewedStatus.type === 'image' ? (
-                    <div className="flex flex-col items-center justify-center max-h-full max-w-full">
-                        <Image 
-                            src={currentViewedStatus.content} 
-                            alt="Status image" 
-                            layout="intrinsic" 
-                            width={1080} 
-                            height={1920}
-                            objectFit="contain"
-                            className="max-h-[calc(100vh-160px)] max-w-full rounded-none md:rounded-md shadow-lg" 
-                            data-ai-hint={currentViewedStatus.dataAiHint || "status image"}
-                            priority 
-                        />
-                    </div>
-                ) : currentViewedStatus.type === 'video' ? (
-                     <div className="flex flex-col items-center justify-center max-h-full max-w-full w-full h-full">
-                        <video
-                            ref={videoStatusRef}
-                            key={currentViewedStatus.id}
-                            src={currentViewedStatus.content}
-                            controls={false}
-                            autoPlay={isVideoStatusPlaying}
-                            muted={isVideoStatusMuted}
-                            playsInline 
-                            className="max-h-[calc(100vh-160px)] max-w-full md:rounded-md bg-black shadow-lg w-auto h-auto object-contain"
-                            data-ai-hint={currentViewedStatus.dataAiHint || "status video"}
-                            // onEnded={nextStatus} // Handled by useEffect on videoElement
-                        />
-                    </div>
-                ) : ( 
-                    <div className="bg-gradient-to-br from-blue-500 to-indigo-700 p-8 rounded-none md:rounded-lg text-center max-w-lg w-[95vw] h-auto min-h-[60vh] flex items-center justify-center shadow-2xl">
-                        <p className="text-3xl md:text-4xl lg:text-5xl text-white font-semibold whitespace-pre-wrap break-words leading-tight">
-                            {currentViewedStatus.content}
-                        </p>
-                    </div>
-                )}
-            </div>
+            {currentViewedStatus && (
+              <div className="relative w-full flex-1 flex items-center justify-center overflow-hidden my-2" onClick={(e) => e.stopPropagation()}>
+                  {currentViewedStatus.type === 'image' ? (
+                      <div className="flex flex-col items-center justify-center max-h-full max-w-full">
+                          <Image 
+                              src={currentViewedStatus.content} 
+                              alt="Status image" 
+                              layout="intrinsic" 
+                              width={1080} 
+                              height={1920}
+                              objectFit="contain"
+                              className="max-h-[calc(100vh-160px)] max-w-full rounded-none md:rounded-md shadow-lg" 
+                              data-ai-hint={currentViewedStatus.dataAiHint || "status image"}
+                              priority 
+                          />
+                      </div>
+                  ) : currentViewedStatus.type === 'video' ? (
+                      <div className="flex flex-col items-center justify-center max-h-full max-w-full w-full h-full">
+                          <video
+                              ref={videoStatusRef}
+                              key={currentViewedStatus.id}
+                              src={currentViewedStatus.content}
+                              controls={false}
+                              autoPlay={isVideoStatusPlaying}
+                              muted={isVideoStatusMuted}
+                              playsInline 
+                              className="max-h-[calc(100vh-160px)] max-w-full md:rounded-md bg-black shadow-lg w-auto h-auto object-contain"
+                              data-ai-hint={currentViewedStatus.dataAiHint || "status video"}
+                          />
+                      </div>
+                  ) : ( 
+                      <div className="bg-gradient-to-br from-primary/80 via-primary/70 to-accent/70 p-8 rounded-none md:rounded-lg text-center max-w-lg w-[95vw] h-auto min-h-[60vh] flex items-center justify-center shadow-2xl">
+                          <p className="text-3xl md:text-4xl lg:text-5xl text-primary-foreground font-semibold whitespace-pre-wrap break-words leading-tight">
+                              {currentViewedStatus.content}
+                          </p>
+                      </div>
+                  )}
+              </div>
+            )}
             
             {/* Caption */}
-            {(currentViewedStatus.type === 'image' || currentViewedStatus.type === 'video') && currentViewedStatus.caption && (
+            {currentViewedStatus && (currentViewedStatus.type === 'image' || currentViewedStatus.type === 'video') && currentViewedStatus.caption && (
                 <div className="w-full pb-4 px-2 md:pb-6 md:px-4 z-[52]">
                   <p className="bg-black/70 text-white text-sm p-2.5 px-4 rounded-lg max-w-xl mx-auto text-center whitespace-pre-wrap shadow-md">
                       {currentViewedStatus.caption}
@@ -617,3 +639,4 @@ export default function StatusPage() {
     </div>
   );
 }
+
