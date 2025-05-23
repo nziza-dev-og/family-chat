@@ -28,7 +28,7 @@ export default function handler(
   // Optional: Validate apiKey from client against server's apiKey if needed,
   // but primary security comes from using the server-side secretKey for signing.
   if (apiKey !== videoSDKApiKey) {
-     console.warn("Client API key does not match server's public API key. Proceeding with server's key for token.");
+     console.warn("Client API key does not match server's public API key. Proceeding with server's key for token generation. This is usually fine if the client is just passing its public key for reference.");
      // This is more of a sanity check or logging point. The token will be signed with the server's credentials.
   }
 
@@ -58,3 +58,5 @@ export default function handler(
     res.status(500).json({ message: 'Failed to generate VideoSDK token' });
   }
 }
+
+    
