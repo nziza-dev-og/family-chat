@@ -3,7 +3,7 @@ import { db, auth } from "@/lib/firebase";
 import { 
   collection, doc, getDoc, getDocs, updateDoc, 
   arrayUnion, query, where, serverTimestamp, setDoc, DocumentData, orderBy, limit, startAfter, QueryDocumentSnapshot, collectionGroup, onSnapshot, addDoc, Timestamp
-} from "firebase/firestore"; // Added Timestamp
+} from "firebase/firestore"; 
 import type { User as FirebaseUserType } from "firebase/auth"; 
 
 export interface ChatUser {
@@ -63,7 +63,7 @@ export async function getFriends(userId: string): Promise<ChatUser[]> {
 
 export async function getAllUsers(currentUserId: string): Promise<ChatUser[]> {
     const usersColRef = collection(db, "users");
-    const q = query(usersColRef, where("uid", "!=", currentUserId));
+    const q = query(usersColRef, where("uid", "!=", currentUserId), limit(50)); // Added limit for performance
     const usersSnap = await getDocs(q);
     return usersSnap.docs.map(docSnap => {
         const data = docSnap.data();
@@ -101,12 +101,27 @@ export async function getOrCreateChatWithUser(currentUserId: string, otherUserId
   if (chatDocSnap.exists()) {
     return chatDocSnap.id;
   } else {
+    // Get user details for participants array
+    const currentUserSnap = await getDoc(doc(db, "users", currentUserId));
+    const otherUserSnap = await getDoc(doc(db, "users", otherUserId));
+
     await setDoc(chatDocRef, {
       participants: sortedUserIds,
       isGroup: false,
       createdAt: serverTimestamp(),
       lastMessage: null,
       lastMessageTimestamp: null,
+      // Optionally store participant details for quicker access, though not strictly necessary for 1-on-1
+      participantDetails: {
+        [currentUserId]: {
+            displayName: currentUserSnap.data()?.displayName || "User",
+            photoURL: currentUserSnap.data()?.photoURL || null
+        },
+        [otherUserId]: {
+            displayName: otherUserSnap.data()?.displayName || "User",
+            photoURL: otherUserSnap.data()?.photoURL || null
+        }
+      }
     });
     return chatDocRef.id;
   }
@@ -124,7 +139,7 @@ export async function getUserChats(userId: string): Promise<ChatListItem[]> {
     let chatListItem: Partial<ChatListItem> = {
       id: chatDoc.id,
       lastMessage: chatData.lastMessage?.text || "No messages yet",
-      time: chatData.lastMessageTimestamp ? formatFirebaseTimestamp(chatData.lastMessageTimestamp) : "", // Use formatFirebaseTimestamp
+      time: chatData.lastMessageTimestamp ? formatFirebaseTimestamp(chatData.lastMessageTimestamp) : "", 
       unread: chatData.unreadCount?.[userId] || 0, 
       participants: chatData.participants,
       isGroup: chatData.isGroup || false,
@@ -138,18 +153,23 @@ export async function getUserChats(userId: string): Promise<ChatListItem[]> {
       const otherUserId = chatData.participants.find((pId: string) => pId !== userId);
       if (otherUserId) {
         chatListItem.otherUserId = otherUserId;
-        const userDocRef = doc(db, "users", otherUserId);
-        const userDocSnap = await getDoc(userDocRef);
-        if (userDocSnap.exists()) {
-          const partnerData = userDocSnap.data();
-          chatListItem.name = partnerData.displayName || "User";
-          chatListItem.avatar = partnerData.photoURL || "https://placehold.co/100x100.png";
-          chatListItem.dataAiHint = "person portrait";
-        } else {
-          chatListItem.name = "User";
-          chatListItem.avatar = "https://placehold.co/100x100.png";
-          chatListItem.dataAiHint = "person portrait";
+        // Try getting from participantDetails first for optimization
+        if (chatData.participantDetails && chatData.participantDetails[otherUserId]) {
+            chatListItem.name = chatData.participantDetails[otherUserId].displayName || "User";
+            chatListItem.avatar = chatData.participantDetails[otherUserId].photoURL || "https://placehold.co/100x100.png";
+        } else { // Fallback to fetching user doc
+            const userDocRef = doc(db, "users", otherUserId);
+            const userDocSnap = await getDoc(userDocRef);
+            if (userDocSnap.exists()) {
+              const partnerData = userDocSnap.data();
+              chatListItem.name = partnerData.displayName || "User";
+              chatListItem.avatar = partnerData.photoURL || "https://placehold.co/100x100.png";
+            } else {
+              chatListItem.name = "User";
+              chatListItem.avatar = "https://placehold.co/100x100.png";
+            }
         }
+        chatListItem.dataAiHint = "person portrait";
       }
     }
     chatListItems.push(chatListItem as ChatListItem);
@@ -157,10 +177,9 @@ export async function getUserChats(userId: string): Promise<ChatListItem[]> {
   return chatListItems;
 }
 
-// Helper to format Firestore timestamp
 function formatFirebaseTimestamp(timestamp: Timestamp | null): string {
   if (!timestamp) return "";
-  const date = timestamp.toDate(); // Convert Firestore Timestamp to JavaScript Date
+  const date = timestamp.toDate(); 
   const today = new Date();
   if (date.toDateString() === today.toDateString()) {
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -171,27 +190,31 @@ function formatFirebaseTimestamp(timestamp: Timestamp | null): string {
 
 export async function addMissedCallMessage(
   chatId: string, 
-  callType: 'audio' | 'video', 
+  callType: 'audio' | 'video' | 'videosdk', 
   originalCallerId: string, 
   calleeWhoMissedId: string
 ): Promise<void> {
-  if (!chatId || !calleeWhoMissedId || !originalCallerId) { // Ensure originalCallerId is also checked
+  if (!chatId || !calleeWhoMissedId || !originalCallerId) { 
     console.error("chatId, originalCallerId, and calleeWhoMissedId are required for missed call message. chatId:", chatId, "callerId:", originalCallerId, "calleeId:", calleeWhoMissedId);
     return;
   }
 
-  const messageText = `Missed ${callType} call`;
+  const messageText = `Missed ${callType === 'videosdk' ? 'video (SDK)' : callType} call`;
   const messagesColRef = collection(db, "chats", chatId, "messages");
   const chatDocRef = doc(db, "chats", chatId);
 
   try {
+    const currentUserSnap = await getDoc(doc(db, "users", calleeWhoMissedId));
+    const senderDisplayName = currentUserSnap.data()?.displayName || "User";
+    const senderAvatar = currentUserSnap.data()?.photoURL || undefined;
+
     await addDoc(messagesColRef, {
       senderId: calleeWhoMissedId, 
       text: messageText,
       timestamp: serverTimestamp(),
       type: 'event_missed_call', 
-      // Optionally, store who initiated the call for context if needed later
-      // originalCallerId: originalCallerId 
+      senderDisplayName: senderDisplayName,
+      senderAvatar: senderAvatar,
     });
     await updateDoc(chatDocRef, {
       lastMessage: { text: messageText, senderId: calleeWhoMissedId },

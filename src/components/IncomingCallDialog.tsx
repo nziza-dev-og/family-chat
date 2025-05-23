@@ -24,6 +24,8 @@ export function IncomingCallDialog() {
   }
 
   const { caller, callType } = incomingCall;
+  let callTypeDisplay = callType;
+  if (callType === 'videosdk') callTypeDisplay = 'video'; // For UI display
 
   return (
     <AlertDialog open={showIncomingCallDialog} onOpenChange={(open) => { if(!open) clearIncomingCall(); }}>
@@ -35,7 +37,7 @@ export function IncomingCallDialog() {
               <AvatarFallback className="text-3xl">{caller.displayName?.substring(0,1) || "C"}</AvatarFallback>
             </Avatar>
           </div>
-          <AlertDialogTitle className="text-xl">Incoming {callType} call</AlertDialogTitle>
+          <AlertDialogTitle className="text-xl">Incoming {callTypeDisplay} call</AlertDialogTitle>
           <AlertDialogDescription className="text-lg">
             {caller.displayName || "Someone"} is calling...
           </AlertDialogDescription>
@@ -55,7 +57,7 @@ export function IncomingCallDialog() {
             onClick={answerCall}
             aria-label="Answer call"
           >
-            {callType === 'video' ? <Video className="mr-2 h-6 w-6" /> : <Phone className="mr-2 h-6 w-6" />}
+            {callTypeDisplay === 'video' ? <Video className="mr-2 h-6 w-6" /> : <Phone className="mr-2 h-6 w-6" />}
             Answer
           </Button>
         </AlertDialogFooter>

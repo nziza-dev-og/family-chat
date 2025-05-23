@@ -4,7 +4,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/components/ui/textarea"; // Added import
 import { Paperclip, Send, Smile, ArrowLeft, Phone, Video, MoreVertical, Loader2, GripHorizontal, Info, Search as SearchIcon, Users, Mic, X, Camera as CameraIcon, UserCircle, Activity } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -161,6 +161,9 @@ function ChatPageContent() {
                 dataAiHint: "person portrait",
                 isGroup: false,
               });
+            } else {
+                toast({title: "Error", description: "Chat partner not found in users collection.", variant: "destructive"});
+                setChatPartner({ uid: "unknown", name: "Deleted User", avatar: "https://placehold.co/100x100.png", dataAiHint: "person", isGroup: false });
             }
           } else {
              toast({title: "Error", description: "Could not determine chat partner.", variant: "destructive"});
@@ -208,6 +211,8 @@ function ChatPageContent() {
         text: newMessage,
         timestamp: serverTimestamp(),
         type: 'text',
+        senderDisplayName: user.displayName || "User",
+        senderAvatar: user.photoURL || undefined
       });
       await updateDoc(chatDocRef, {
         lastMessage: { text: newMessage, senderId: user.uid },
@@ -280,36 +285,36 @@ function ChatPageContent() {
   return (
     <div className="flex-1 flex h-full">
       <div className="flex-1 flex flex-col bg-card h-full">
-        <header className="flex items-center p-3 border-b border-border bg-card sticky top-0 z-10 shadow-sm h-[var(--header-height)]">
+        <header className="flex items-center p-3 border-b border-border bg-primary text-primary-foreground sticky top-0 z-10 shadow-sm h-[var(--header-height)]">
           {showBackButton && (
-            <Button variant="ghost" size="icon" className="mr-2 md:hidden text-foreground hover:bg-accent/10 rounded-full" onClick={() => router.push("/chats")}>
+            <Button variant="ghost" size="icon" className="mr-2 md:hidden text-primary-foreground hover:bg-primary/80 rounded-full" onClick={() => router.push("/chats")}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
           )}
-          <Avatar className="h-10 w-10 mr-3 border-2 border-border">
+          <Avatar className="h-10 w-10 mr-3 border-2 border-primary-foreground/50">
             <AvatarImage src={chatPartner.avatar} alt={chatPartner.name} data-ai-hint={chatPartner.dataAiHint} />
-            <AvatarFallback className="bg-muted text-muted-foreground">{chatPartner.name.substring(0,1)}</AvatarFallback>
+            <AvatarFallback className="bg-primary-foreground/20 text-primary-foreground">{chatPartner.name.substring(0,1)}</AvatarFallback>
           </Avatar>
           <div className="flex-1">
-            <h2 className="font-semibold text-base text-foreground">{chatPartner.name}</h2>
-            <p className="text-xs text-muted-foreground">{chatPartner.status}</p>
+            <h2 className="font-semibold text-base">{chatPartner.name}</h2>
+            <p className="text-xs text-primary-foreground/80">{chatPartner.status}</p>
           </div>
           <div className="flex items-center space-x-0.5">
-            <Button variant="ghost" size="icon" aria-label="Search in chat" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full">
+            <Button variant="ghost" size="icon" aria-label="Search in chat" className="text-primary-foreground hover:bg-primary/80 rounded-full">
               <SearchIcon className="h-5 w-5" />
             </Button>
             <Link href={`/call/audio/${chatId}`} passHref>
-              <Button variant="ghost" size="icon" aria-label="Start audio call" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full">
+              <Button variant="ghost" size="icon" aria-label="Start audio call" className="text-primary-foreground hover:bg-primary/80 rounded-full">
                 <Phone className="h-5 w-5" />
               </Button>
             </Link>
-            <Link href={`/videosdk-call`} passHref>
-              <Button variant="ghost" size="icon" aria-label="Start video call" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full">
+            <Link href={`/videosdk-call?calleeId=${chatPartner.uid}&chatId=${chatId}`} passHref>
+              <Button variant="ghost" size="icon" aria-label="Start video call" className="text-primary-foreground hover:bg-primary/80 rounded-full">
                 <Video className="h-5 w-5" />
               </Button>
             </Link>
-            <Button variant="ghost" size="icon" aria-label={chatPartner.isGroup ? "Group Info" : "More options"} className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full" onClick={() => setIsGroupInfoPanelOpen(prev => !prev)}>
-              {chatPartner.isGroup ? <Users className="h-5 w-5" /> : <MoreVertical className="h-5 w-5" />}
+            <Button variant="ghost" size="icon" aria-label={chatPartner.isGroup ? "Group Info" : "More options"} className="text-primary-foreground hover:bg-primary/80 rounded-full" onClick={() => setIsGroupInfoPanelOpen(prev => !prev)}>
+              {chatPartner.isGroup ? <Users className="h-5 w-5" /> : <Info className="h-5 w-5" />}
             </Button>
           </div>
         </header>
@@ -400,7 +405,7 @@ function ChatPageContent() {
                             key={emoji}
                             variant="ghost"
                             className="text-xl p-0 h-8 w-8 aspect-square hover:bg-accent/50 rounded-md"
-                            onClick={() => { handleEmojiSelect(emoji); /* setIsEmojiPickerOpen(false); */ }}
+                            onClick={() => { handleEmojiSelect(emoji); }}
                           >
                             {emoji}
                           </Button>
@@ -452,3 +457,7 @@ export default function ChatPage() {
     </Suspense>
   )
 }
+
+    
+    
+    
