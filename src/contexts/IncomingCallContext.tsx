@@ -2,20 +2,20 @@
 "use client";
 
 import type { ReactNode} from 'react';
-import { createContext, useContext, useState, useCallback } from 'react';
-import { useRouter, usePathname } from 'next/navigation'; 
-import { db } from "@/lib/firebase"; 
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
+import { db } from "@/lib/firebase";
 import { doc, updateDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
-import type { ChatUser } from '@/lib/chatActions'; 
+import type { ChatUser } from '@/lib/chatActions';
 import { addMissedCallMessage } from '@/lib/chatActions';
 import { useAuth } from '@/hooks/useAuth';
 
 export interface IncomingCallData {
-  chatId: string; 
-  caller: ChatUser; 
-  callType: 'audio' | 'video' | 'videosdk'; // Added videosdk
-  callDocId: string; // Firestore doc ID for custom WebRTC calls
+  chatId: string;
+  caller: ChatUser;
+  callType: 'audio' | 'video' | 'videosdk';
+  callDocId: string; // Firestore doc ID for custom WebRTC calls (rooms collection) or videoCallInvites doc ID
   videosdkMeetingId?: string; // Meeting ID for VideoSDK calls
 }
 
@@ -40,41 +40,54 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { toast } = useToast();
   const { user } = useAuth();
+  const incomingCallRef = useRef(incomingCall);
 
-  const presentIncomingCall = useCallback((callData: IncomingCallData) => {
-    let onCallPage = false;
-    if (callData.callType === 'videosdk') {
-      onCallPage = pathname?.includes(`/videosdk-call`); // Simpler check for videosdk
-    } else {
-      onCallPage = pathname?.includes(`/call/${callData.callType}/${callData.chatId}`);
-    }
-    
-    if (onCallPage && callData.callType !== 'videosdk') { // For non-videosdk, if on call page, don't show dialog
-        if (incomingCall && incomingCall.callDocId === callData.callDocId) clearIncomingCall('navigating_away');
-        return;
-    }
-    // Allow showing dialog for VideoSDK even if on the generic /videosdk-call page,
-    // because user might be there but not in the specific meeting.
-    setIncomingCall(callData);
-    setShowIncomingCallDialog(true);
-  }, [pathname, incomingCall, clearIncomingCall]); // Added incomingCall and clearIncomingCall to deps
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
 
   const clearIncomingCall = useCallback(async (
     reason?: 'answered' | 'declined_by_user' | 'call_ended_by_other' | 'navigating_away',
     detailsForMissedCall?: { callType: 'audio' | 'video' | 'videosdk'; callerId: string; calleeId: string, chatId: string }
   ) => {
-    if (reason === 'call_ended_by_other' && incomingCall && user && detailsForMissedCall) {
+    const currentIncomingCall = incomingCallRef.current; // Use ref to get latest value
+    if (reason === 'call_ended_by_other' && currentIncomingCall && user && detailsForMissedCall) {
       await addMissedCallMessage(detailsForMissedCall.chatId, detailsForMissedCall.callType, detailsForMissedCall.callerId, detailsForMissedCall.calleeId);
     }
     setIncomingCall(null);
     setShowIncomingCallDialog(false);
-  }, [incomingCall, user]); // Added incomingCall and user to deps
+  }, [user]); // Removed incomingCall from here, using ref instead
+
+  const presentIncomingCall = useCallback((callData: IncomingCallData) => {
+    let onCallPage = false;
+    if (callData.callType === 'videosdk') {
+      // Check if currently on the /videosdk-call page AND if the incoming call is for a *different* meetingId
+      onCallPage = pathname?.includes(`/videosdk-call`);
+      if (onCallPage && incomingCallRef.current && incomingCallRef.current.callType === 'videosdk' && incomingCallRef.current.videosdkMeetingId === callData.videosdkMeetingId) {
+        // Already showing dialog for this exact VideoSDK call, or user is on this meeting page
+        // This helps prevent dialog re-appearing if user is already joining the meeting.
+        return;
+      }
+    } else { // For WebRTC 'audio' or 'video' calls
+      onCallPage = pathname?.includes(`/call/${callData.callType}/${callData.chatId}`);
+    }
+
+    if (onCallPage && callData.callType !== 'videosdk') {
+        if (incomingCallRef.current && incomingCallRef.current.callDocId === callData.callDocId) {
+            clearIncomingCall('navigating_away');
+        }
+        return;
+    }
+    setIncomingCall(callData);
+    setShowIncomingCallDialog(true);
+  }, [pathname, clearIncomingCall]);
+
 
   const answerCall = useCallback(async () => {
-    if (!incomingCall || !user) return;
-    const { callType, chatId, callDocId, videosdkMeetingId, caller } = incomingCall;
-    
-    setShowIncomingCallDialog(false); 
+    if (!incomingCallRef.current || !user) return; // Use ref
+    const { callType, chatId, callDocId, videosdkMeetingId, caller } = incomingCallRef.current;
+
+    setShowIncomingCallDialog(false);
 
     if (callType === 'videosdk') {
       if (!videosdkMeetingId) {
@@ -84,53 +97,52 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
         return;
       }
       router.push(`/videosdk-call?meetingIdToJoin=${videosdkMeetingId}&callerName=${encodeURIComponent(caller.displayName || 'Caller')}&chatId=${chatId}`);
-      // Mark invite as answered
       try {
         await updateDoc(doc(db, "videoCallInvites", user.uid), { status: 'answered', updatedAt: serverTimestamp() });
       } catch (error) {
         console.error("Error updating videoCallInvite to answered:", error);
       }
     } else { // Firestore WebRTC call
-      const roomDocRef = doc(db, "rooms", callDocId); 
+      const roomDocRef = doc(db, "rooms", callDocId);
       const roomSnap = await getDoc(roomDocRef);
       if (!roomSnap.exists() || roomSnap.data()?.status !== 'ringing') {
           toast({ title: "Call Ended", description: "This call is no longer available.", variant: "destructive" });
           clearIncomingCall('call_ended_by_other', {
-              chatId: incomingCall.chatId,
-              callType: incomingCall.callType,
-              callerId: incomingCall.caller.uid,
-              calleeId: user.uid 
+              chatId: incomingCallRef.current.chatId,
+              callType: incomingCallRef.current.callType as 'audio' | 'video', // Type assertion
+              callerId: incomingCallRef.current.caller.uid,
+              calleeId: user.uid
           });
           return;
       }
       router.push(`/call/${callType}/${chatId}`);
     }
-    // Don't call clearIncomingCall immediately; let AppLayout handle it based on navigation or status change.
-  }, [incomingCall, router, toast, user, clearIncomingCall]); // Added clearIncomingCall and user
+    // clearIncomingCall('answered'); // Let AppLayout handle clearing based on navigation or status change
+  }, [router, toast, user, clearIncomingCall]);
 
   const declineCall = useCallback(async () => {
-    if (!incomingCall || !user) return;
-    const { callDocId, chatId, callType, caller, videosdkMeetingId } = incomingCall;
+    if (!incomingCallRef.current || !user) return; // Use ref
+    const { callDocId, chatId, callType, caller, videosdkMeetingId } = incomingCallRef.current;
     try {
       if (callType === 'videosdk') {
         await updateDoc(doc(db, "videoCallInvites", user.uid), { status: 'declined', updatedAt: serverTimestamp() });
         toast({ title: "Call Declined" });
         await addMissedCallMessage(chatId, 'videosdk', caller.uid, user.uid);
       } else { // Firestore WebRTC call
-        const roomDocRef = doc(db, "rooms", callDocId); 
-        await updateDoc(roomDocRef, { 
-          status: "declined", 
-          updatedAt: serverTimestamp(), 
+        const roomDocRef = doc(db, "rooms", callDocId);
+        await updateDoc(roomDocRef, {
+          status: "declined",
+          updatedAt: serverTimestamp(),
         });
         toast({ title: "Call Declined" });
-        await addMissedCallMessage(chatId, callType, caller.uid, user.uid);
+        await addMissedCallMessage(chatId, callType as 'audio' | 'video', caller.uid, user.uid);
       }
     } catch (error) {
       console.error("Error declining call:", error);
       toast({ title: "Error", description: "Could not decline call.", variant: "destructive" });
     }
     clearIncomingCall('declined_by_user');
-  }, [incomingCall, toast, user, clearIncomingCall]); // Added user and clearIncomingCall
+  }, [toast, user, clearIncomingCall]);
 
   return (
     <IncomingCallContext.Provider
