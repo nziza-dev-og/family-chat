@@ -2,7 +2,7 @@
 "use client";
 
 import type { ReactNode} from 'react';
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'; // Added useRef
 import { useRouter, usePathname } from 'next/navigation';
 import { db } from "@/lib/firebase";
 import { doc, updateDoc, getDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
@@ -50,30 +50,29 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
     reason?: 'answered' | 'declined_by_user' | 'call_ended_by_other' | 'navigating_away',
     detailsForMissedCall?: { callType: 'audio' | 'video' | 'videosdk'; callerId: string; calleeId: string, chatId: string }
   ) => {
-    const currentIncomingCall = incomingCallRef.current; // Use ref to get latest value
-    if (reason === 'call_ended_by_other' && currentIncomingCall && user && detailsForMissedCall) {
+    const currentCallToClear = incomingCallRef.current; 
+    if (reason === 'call_ended_by_other' && currentCallToClear && user && detailsForMissedCall) {
       await addMissedCallMessage(detailsForMissedCall.chatId, detailsForMissedCall.callType, detailsForMissedCall.callerId, detailsForMissedCall.calleeId);
     }
     setIncomingCall(null);
     setShowIncomingCallDialog(false);
-  }, [user]); // Removed incomingCall from here, using ref instead
+  }, [user]);
 
   const presentIncomingCall = useCallback((callData: IncomingCallData) => {
     let onCallPage = false;
+    const currentCall = incomingCallRef.current;
+
     if (callData.callType === 'videosdk') {
-      // Check if currently on the /videosdk-call page AND if the incoming call is for a *different* meetingId
       onCallPage = pathname?.includes(`/videosdk-call`);
-      if (onCallPage && incomingCallRef.current && incomingCallRef.current.callType === 'videosdk' && incomingCallRef.current.videosdkMeetingId === callData.videosdkMeetingId) {
-        // Already showing dialog for this exact VideoSDK call, or user is on this meeting page
-        // This helps prevent dialog re-appearing if user is already joining the meeting.
+      if (onCallPage && currentCall && currentCall.callType === 'videosdk' && currentCall.videosdkMeetingId === callData.videosdkMeetingId) {
         return;
       }
-    } else { // For WebRTC 'audio' or 'video' calls
+    } else { 
       onCallPage = pathname?.includes(`/call/${callData.callType}/${callData.chatId}`);
     }
 
     if (onCallPage && callData.callType !== 'videosdk') {
-        if (incomingCallRef.current && incomingCallRef.current.callDocId === callData.callDocId) {
+        if (currentCall && currentCall.callDocId === callData.callDocId) {
             clearIncomingCall('navigating_away');
         }
         return;
@@ -84,10 +83,11 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
 
 
   const answerCall = useCallback(async () => {
-    if (!incomingCallRef.current || !user) return; // Use ref
-    const { callType, chatId, callDocId, videosdkMeetingId, caller } = incomingCallRef.current;
+    const callToAnswer = incomingCallRef.current;
+    if (!callToAnswer || !user) return; 
+    const { callType, chatId, callDocId, videosdkMeetingId, caller } = callToAnswer;
 
-    setShowIncomingCallDialog(false);
+    setShowIncomingCallDialog(false); // Hide dialog immediately
 
     if (callType === 'videosdk') {
       if (!videosdkMeetingId) {
@@ -98,6 +98,7 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
       }
       router.push(`/videosdk-call?meetingIdToJoin=${videosdkMeetingId}&callerName=${encodeURIComponent(caller.displayName || 'Caller')}&chatId=${chatId}`);
       try {
+        // Update status after navigation attempt to ensure user experience is smooth
         await updateDoc(doc(db, "videoCallInvites", user.uid), { status: 'answered', updatedAt: serverTimestamp() });
       } catch (error) {
         console.error("Error updating videoCallInvite to answered:", error);
@@ -108,21 +109,21 @@ export function IncomingCallProvider({ children }: { children: ReactNode }) {
       if (!roomSnap.exists() || roomSnap.data()?.status !== 'ringing') {
           toast({ title: "Call Ended", description: "This call is no longer available.", variant: "destructive" });
           clearIncomingCall('call_ended_by_other', {
-              chatId: incomingCallRef.current.chatId,
-              callType: incomingCallRef.current.callType as 'audio' | 'video', // Type assertion
-              callerId: incomingCallRef.current.caller.uid,
+              chatId: callToAnswer.chatId,
+              callType: callToAnswer.callType as 'audio' | 'video', 
+              callerId: callToAnswer.caller.uid,
               calleeId: user.uid
           });
           return;
       }
       router.push(`/call/${callType}/${chatId}`);
     }
-    // clearIncomingCall('answered'); // Let AppLayout handle clearing based on navigation or status change
   }, [router, toast, user, clearIncomingCall]);
 
   const declineCall = useCallback(async () => {
-    if (!incomingCallRef.current || !user) return; // Use ref
-    const { callDocId, chatId, callType, caller, videosdkMeetingId } = incomingCallRef.current;
+    const callToDecline = incomingCallRef.current;
+    if (!callToDecline || !user) return; 
+    const { callDocId, chatId, callType, caller } = callToDecline;
     try {
       if (callType === 'videosdk') {
         await updateDoc(doc(db, "videoCallInvites", user.uid), { status: 'declined', updatedAt: serverTimestamp() });
