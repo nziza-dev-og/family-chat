@@ -4,11 +4,11 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Paperclip, Send, Smile, ArrowLeft, Phone, Video, MoreVertical, Loader2, GripHorizontal, Info, Search as SearchIcon, Users, Mic, X } from "lucide-react"; // Added X
+import { Paperclip, Send, Smile, ArrowLeft, Phone, Video, MoreVertical, Loader2, GripHorizontal, Info, Search as SearchIcon, Users, Mic, X } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, type KeyboardEvent } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, Timestamp, updateDoc } from "firebase/firestore";
@@ -26,6 +26,9 @@ interface Message {
   type?: 'text' | 'image' | 'event_missed_call' | 'voice';
   mediaUrl?: string; 
   mediaDuration?: string;
+  // For group chats, we might need sender's name/avatar if not fetching for every message
+  senderDisplayName?: string; 
+  senderAvatar?: string;
 }
 
 interface ChatPartner {
@@ -35,30 +38,65 @@ interface ChatPartner {
   status?: string; 
   dataAiHint: string;
   isGroup?: boolean;
+  participantsCount?: number; // For groups
 }
 
 const emojiCategories = {
-  "Smileys & People": ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "🥳", "😏", "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿", "👍", "👎", "👌", "🤏", "👈", "👉", "👆", "👇", "👋", "🤚", "🖐", "🖖", "❤️", "💔", "🎉", "✨", "🔥", "🙏"],
-  "Animals & Nature": ["🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐮", "🐷", "🐽", "🐸", "🐵", "🙈", "🙉", "🙊", "🐒", "🐔", "🐧", "🐦", "🐤", "🐣", "🐥", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞", "🐜", "🦟", "🦗", "🕷️", "🕸️", "🦂", "🐢", "🐍", "🦎", "🦖", "🦕", "🐙", "🦑", "🦐", "🦞", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🦧", "🐘", "🦛", "🦏", "🐪", "🐫", "🦒", "🦘", "🐃", "🐂", "🐄", "🐎", "🐖", "🐏", "🐑", "🦙", "🐐", "🦌", "🐕", "🐩", "🦮", "🐕‍🦺", "🐈", "🐈‍⬛", "🌲", "🌳", "🌴", "🌵", "🌷", "🌸", "🌹", "🌺", "🌻", "🌼", "🌞", "🌛", "⭐"],
-  "Food & Drink": ["🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️", "🌽", "🥕", "🧄", "🧅", "🥔", "🍠", "🥐", "🥯", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞", "🧇", "🥓", "🥩", "🍗", "🍖", "🦴", "🌭", "🍔", "🍟", "🍕", "🥪", "🥙", "🧆", "🌮", "🌯", "🥗", "🥘", "🥫", "🍝", "🍜", "🍲", "🍛", "🍣", "🍱", "🥟", "🍤", "🍙", "🍚", "🍘", "🍥", "🥠", "🥮", "🍢", "🍡", "🍧", "🍨", "🍦", "🥧", "🧁", "🍰", "🎂", "🍮", "🍭", "🍬", "🍫", "🍿", "🍩", "🍪", "🌰", "🥜", "🍯", "🥛", "🍼", "☕", "🍵", "🧃", "🥤", "🍶", "🍺", "🍻", "🥂", "🍷", "🥃", "🍸", "🍹", "🧉", "🍾", "🧊", "🥄", "🍴", "🍽️", "🥣", "🥡", "🥢", "🧂"],
+  "Smileys & Emotion": ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🤩", "🥳", "😏", "😒", "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡", "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥", "😶", "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿"],
+  "People & Body": ["👋", "🤚", "🖐", "✋", "🖖", "👌", "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "👈", "👉", "👆", "🖕", "👇", "☝️", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "🫶", "👐", "🤲", "🤝", "🙏", "✍️", "💅", "🤳", "💪", "🦾", "🦵", "🦿", "🦶", "👂", "🦻", "👃", "🧠", "🫀", "🫁", "🦷", "🦴", "👀", "👁️", "👅", "👄", "💋", "👶", "🧒", "👦", "👧", "🧑", "👱", "👨", "🧔", "🧔‍♀️", "🧔‍♂️", "👨‍🦰", "👨‍🦱", "👨‍🦳", "👨‍🦲", "👩", "👩‍🦰", "🧑‍🦰", "👩‍🦱", "👩‍🦳", "👩‍🦲", "👱‍♀️", "👱‍♂️", "🧓", "👴", "👵"],
+  "Animals & Nature": ["🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐻‍❄️", "🐨", "🐯", "🦁", "🐮", "🐷", "🐽", "🐸", "🐵", "🙈", "🙉", "🙊", "🐒", "🐔", "🐧", "🐦", "🐤", "🐣", "🐥", "🦆", "🦅", "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌", "🐞", "🐜", "🪰", "🪲", "🪳", "🦟", "🦗", "🕷️", "🕸️", "🦂", "🐢", "🐍", "🦎", "🦖", "🦕", "🐙", "🦑", "🦐", "🦞", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳", "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🦧", "🐘", "🦛", "🦏", "🐪", "🐫", "🦒", "🦘", "🦬", "🐃", "🐂", "🐄", "🐎", "🐖", "🐏", "🐑", "🦙", "🐐", "🦌", "🐕", "🐩", "🦮", "🐕‍", "🐈", "🐈‍⬛", "🪶", "🐾", "🐉", "🐲", "🌵", "🎄", "🌲", "🌳", "🌴", "🪵", "🌱", "🌿", "☘️", "🍀", "🎍", "🪴", "🎋", "🍃", "🍂", "🍁", "🍄", "🐚", "🪨", "🌾", "💐", "🌷", "🌹", "🥀", "🪷", "🌺", "🌸", "🌼", "🌻", "🌞", "🌝", "🌛", "🌜", "🌚", "🌕", "🌖", "🌗", "🌘", "🌑", "🌒", "🌓", "🌔", "🌙", "🌎", "🌍", "🌏", "🪐", "💫", "⭐️", "🌟", "✨", "⚡️", "☄️", "💥", "🔥", "🌪️", "🌈", "☀️", "🌤️", "⛅️", "🌥️", "☁️", "🌦️", "🌧️", "⛈️", "🌩️", "🌨️", "❄️", "☃️", "⛄️", "🌬️", "💨", "💧", "💦", "🫧", "☂️", "☔️", "🌊", "🌫️"],
+  "Food & Drink": ["🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️", "🫑", "🌽", "🥕", "🫒", "🧄", "🧅", "🥔", "🍠", "🫚", "🥐", "🥯", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞", "🧇", "🥓", "🥩", "🍗", "🍖", "🦴", "🌭", "🍔", "🍟", "🍕", "🫓", "🥪", "🥙", "🧆", "🌮", "🌯", "🫔", "🥗", "🥘", "🫕", "🥫", "🍝", "🍜", "🍲", "🍛", "🍣", "🍱", "🥟", "🦪", "🍤", "🍙", "🍚", "🍘", "🍥", "🥠", "🥮", "🍢", "🍡", "🍧", "🍨", "🍦", "🥧", "🧁", "🍰", "🎂", "🍮", "🍭", "🍬", "🍫", "🍿", "🍩", "🍪", "🌰", "🥜", "🫘", "🍯", "🥛", "🍼", "🫖", "☕️", "🍵", "🧃", "🥤", "🧋", "🍶", "🍺", "🍻", "🥂", "🍷", "🥃", "🍸", "🍹", "🧉", "🍾", "🧊", "🥄", "🍴", "🍽️", "🥣", "🥡", "🥢", "🧂"],
 };
 
 const GroupInfoPanel = ({ chatPartner, onClose }: { chatPartner: ChatPartner | null; onClose: () => void }) => {
   if (!chatPartner || !chatPartner.isGroup) return null;
 
   return (
-    <div className="w-80 border-l border-border bg-group-info-background p-4 flex-col h-full overflow-y-auto hidden lg:flex">
-      <div className="flex items-center justify-between mb-4">
+    <div className="w-full md:w-80 lg:w-96 border-l border-border bg-group-info-background p-4 flex-col h-full overflow-y-auto hidden lg:flex shadow-lg">
+      <div className="flex items-center justify-between mb-6">
         <h2 className="text-lg font-semibold text-group-info-foreground">Group Info</h2>
-        <Button variant="ghost" size="icon" onClick={onClose} className="text-group-info-foreground hover:bg-secondary/20">
+        <Button variant="ghost" size="icon" onClick={onClose} className="text-group-info-foreground hover:bg-secondary/20 rounded-full">
           <X className="h-5 w-5" />
         </Button>
       </div>
-      <p className="text-sm text-group-info-foreground/80">Files, members, and other group settings will appear here.</p>
-      <div className="mt-4">
-        <h3 className="font-medium text-group-info-foreground mb-2">23 members</h3>
-        {/* Placeholder members */}
+      <div className="flex flex-col items-center mb-6">
+        <Avatar className="h-24 w-24 mb-3 border-4 border-primary/30">
+            <AvatarImage src={chatPartner.avatar} alt={chatPartner.name} data-ai-hint={chatPartner.dataAiHint} />
+            <AvatarFallback className="text-3xl bg-muted text-muted-foreground">{chatPartner.name.substring(0,1)}</AvatarFallback>
+        </Avatar>
+        <h3 className="text-xl font-semibold text-group-info-foreground">{chatPartner.name}</h3>
+        <p className="text-sm text-muted-foreground">{chatPartner.participantsCount} members</p>
       </div>
+      
+      <div className="space-y-4">
+        <div>
+          <h4 className="font-medium text-group-info-foreground mb-1 text-sm">Description</h4>
+          <p className="text-xs text-muted-foreground">This is where the group description would go. It can be edited by admins.</p>
+        </div>
+        <div>
+          <h4 className="font-medium text-group-info-foreground mb-2 text-sm">Members ({chatPartner.participantsCount})</h4>
+          <ScrollArea className="h-48">
+            {/* Placeholder members - replace with actual participant data */}
+            {Array.from({ length: chatPartner.participantsCount || 0 }).map((_, i) => (
+              <div key={i} className="flex items-center space-x-2 p-1.5 hover:bg-secondary/10 rounded-md">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={`https://placehold.co/40x40.png?text=U${i+1}`} alt={`User ${i+1}`} data-ai-hint="person portrait" />
+                  <AvatarFallback className="text-xs bg-muted">U{i+1}</AvatarFallback>
+                </Avatar>
+                <span className="text-xs text-group-info-foreground">User {i+1} Name</span>
+              </div>
+            ))}
+          </ScrollArea>
+        </div>
+         <div>
+          <h4 className="font-medium text-group-info-foreground mb-2 text-sm">Shared Media</h4>
+          <p className="text-xs text-muted-foreground">No media shared yet.</p>
+          {/* Placeholder for media grid */}
+        </div>
+      </div>
+       <Button variant="outline" className="mt-auto w-full text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/50">
+        Exit Group
+      </Button>
     </div>
   );
 };
@@ -81,7 +119,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "auto" });
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages]);
 
@@ -106,9 +144,10 @@ export default function ChatPage() {
                 uid: chatId,
                 name: chatData.groupName || "Group Chat",
                 avatar: chatData.groupAvatar || "https://placehold.co/100x100.png",
-                status: `${chatData.participants.length} members, ${Math.floor(Math.random() * chatData.participants.length)} online`, 
+                status: `${chatData.participants.length} members`, 
                 dataAiHint: "group people",
                 isGroup: true,
+                participantsCount: chatData.participants.length,
               });
           } else if (partnerId) {
             const userDocRef = doc(db, "users", partnerId);
@@ -119,7 +158,7 @@ export default function ChatPage() {
                 uid: partnerId,
                 name: partnerData.displayName || "Chat User",
                 avatar: partnerData.photoURL || "https://placehold.co/100x100.png",
-                status: "Online", 
+                status: "Online", // Placeholder
                 dataAiHint: "person portrait",
                 isGroup: false,
               });
@@ -176,10 +215,17 @@ export default function ChatPage() {
         lastMessageTimestamp: serverTimestamp(),
       });
       setNewMessage("");
-      setIsEmojiPickerOpen(false); // Close emoji picker on send
+      setIsEmojiPickerOpen(false);
     } catch (error) {
       console.error("Error sending message:", error);
       toast({title: "Error", description: "Failed to send message.", variant: "destructive"});
+    }
+  };
+  
+  const handleTextareaKeyPress = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSendMessage();
     }
   };
 
@@ -213,10 +259,9 @@ export default function ChatPage() {
     });
   };
 
-
   if (authLoading || isLoading) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-card">
+      <div className="flex-1 flex flex-col items-center justify-center bg-card h-full">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
         <p className="mt-4 text-muted-foreground">Loading chat...</p>
       </div>
@@ -225,7 +270,7 @@ export default function ChatPage() {
   
   if (!chatPartner) {
      return (
-      <div className="flex-1 flex flex-col items-center justify-center bg-card">
+      <div className="flex-1 flex flex-col items-center justify-center bg-card h-full">
         <p className="text-muted-foreground">Select a chat to start messaging.</p>
       </div>
     );
@@ -233,13 +278,12 @@ export default function ChatPage() {
 
   const showBackButton = !params?.chatId || (typeof window !== 'undefined' && window.innerWidth < 768);
 
-
   return (
     <div className="flex-1 flex h-full">
       <div className="flex-1 flex flex-col bg-card h-full">
-        <header className="flex items-center p-3.5 border-b border-border bg-card sticky top-0 z-10 shadow-sm">
+        <header className="flex items-center p-3 border-b border-border bg-card sticky top-0 z-10 shadow-sm h-[var(--header-height)]">
           {showBackButton && (
-            <Button variant="ghost" size="icon" className="mr-2 md:hidden text-foreground hover:bg-accent/10" onClick={() => router.push("/chats")}>
+            <Button variant="ghost" size="icon" className="mr-2 md:hidden text-foreground hover:bg-accent/10 rounded-full" onClick={() => router.push("/chats")}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
           )}
@@ -248,30 +292,30 @@ export default function ChatPage() {
             <AvatarFallback className="bg-muted text-muted-foreground">{chatPartner.name.substring(0,1)}</AvatarFallback>
           </Avatar>
           <div className="flex-1">
-            <h2 className="font-semibold text-base">{chatPartner.name}</h2>
+            <h2 className="font-semibold text-base text-foreground">{chatPartner.name}</h2>
             <p className="text-xs text-muted-foreground">{chatPartner.status}</p>
           </div>
-          <div className="flex items-center space-x-1">
-            <Button variant="ghost" size="icon" aria-label="Search in chat" className="text-foreground hover:bg-accent/10">
+          <div className="flex items-center space-x-0.5">
+            <Button variant="ghost" size="icon" aria-label="Search in chat" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full">
               <SearchIcon className="h-5 w-5" />
             </Button>
             <Link href={`/call/audio/${chatId}`} passHref>
-              <Button variant="ghost" size="icon" aria-label="Start audio call" className="text-foreground hover:bg-accent/10">
+              <Button variant="ghost" size="icon" aria-label="Start audio call" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full">
                 <Phone className="h-5 w-5" />
               </Button>
             </Link>
-            <Link href={`/videocall`} passHref> {/* Removed initialRoomId query param */}
-              <Button variant="ghost" size="icon" aria-label="Start video call" className="text-foreground hover:bg-accent/10">
+            <Link href={`/videocall?initialRoomId=${chatId}`} passHref>
+              <Button variant="ghost" size="icon" aria-label="Start video call" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full">
                 <Video className="h-5 w-5" />
               </Button>
             </Link>
-            <Button variant="ghost" size="icon" aria-label={chatPartner.isGroup ? "Group Info" : "More options"} className="text-foreground hover:bg-accent/10" onClick={() => setIsGroupInfoPanelOpen(prev => !prev)}>
+            <Button variant="ghost" size="icon" aria-label={chatPartner.isGroup ? "Group Info" : "More options"} className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full" onClick={() => setIsGroupInfoPanelOpen(prev => !prev)}>
               {chatPartner.isGroup ? <Users className="h-5 w-5" /> : <MoreVertical className="h-5 w-5" />}
             </Button>
           </div>
         </header>
 
-        <ScrollArea className="flex-1 overflow-y-auto p-4 space-y-3 chat-bg">
+        <ScrollArea className="flex-1 overflow-y-auto p-4 space-y-2 chat-bg">
           {messages.map((msg, index) => {
             const isUser = msg.senderId === user?.uid;
             const prevMessage = messages[index-1];
@@ -280,39 +324,39 @@ export default function ChatPage() {
             return (
             <div key={msg.id} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
               {!isUser && chatPartner.isGroup && (
-                 <Avatar className="h-8 w-8 mr-2 self-end shrink-0 opacity-0">
-                    <AvatarFallback></AvatarFallback>
+                 <Avatar className={cn("h-7 w-7 mr-2 self-end shrink-0", !showSenderName && "opacity-0")}>
+                     {/* In a real app, fetch sender's avatar based on msg.senderId for groups */}
+                    <AvatarImage src={msg.senderAvatar || undefined} alt={msg.senderDisplayName || "U"} data-ai-hint="person portrait" />
+                    <AvatarFallback className="text-xs bg-muted text-muted-foreground">{msg.senderDisplayName?.substring(0,1) || "U"}</AvatarFallback>
                   </Avatar>
               )}
               <div className={`max-w-[70%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                 {showSenderName && (
                   <span className="text-xs text-muted-foreground mb-0.5 ml-2">{
-                    // In a real app, you'd fetch sender's name based on msg.senderId
-                    "Other User" // Placeholder
+                     msg.senderDisplayName || "Other User"
                   }</span>
                 )}
                 {msg.type === 'event_missed_call' ? (
                     <div className="w-full flex justify-center my-2">
-                        <div className="text-xs text-center text-muted-foreground bg-muted/70 px-3 py-1 rounded-full shadow-sm">
+                        <div className="text-xs text-center text-muted-foreground bg-muted/70 px-3 py-1.5 rounded-full shadow-sm">
                             {msg.text}
                         </div>
                     </div>
                 ) : (
                   <div
                     className={cn(
-                      "p-2.5 rounded-lg shadow-sm text-sm break-words",
+                      "p-2.5 rounded-xl shadow-sm text-sm break-words relative",
                       isUser
-                        ? 'bg-chat-bubble-outgoing-background text-chat-bubble-outgoing-foreground ml-auto'
-                        : 'bg-chat-bubble-incoming-background text-chat-bubble-incoming-foreground',
-                      isUser ? 'rounded-br-none' : 'rounded-bl-none'
+                        ? 'bg-chat-bubble-outgoing-background text-chat-bubble-outgoing-foreground ml-auto rounded-br-sm'
+                        : 'bg-chat-bubble-incoming-background text-chat-bubble-incoming-foreground rounded-bl-sm',
                     )}
                   >
                     {msg.type === 'image' && msg.imageUrl ? (
-                      <Image src={msg.imageUrl} alt="Sent image" width={300} height={200} className="rounded-md object-cover max-w-xs" data-ai-hint="chat image"/>
+                      <Image src={msg.imageUrl} alt="Sent image" width={300} height={200} className="rounded-md object-cover max-w-xs cursor-pointer" data-ai-hint="chat image"/>
                     ) : msg.type === 'voice' && msg.mediaUrl ? (
-                       <div className="flex items-center space-x-2 text-foreground/80">
-                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                            <Mic className="h-4 w-4" />
+                       <div className="flex items-center space-x-2 text-foreground/80 py-1">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 hover:bg-primary/10">
+                            <Mic className="h-4 w-4 text-primary" />
                           </Button>
                           <div className="w-32 h-1 bg-muted-foreground/30 rounded-full relative">
                             <div className="absolute left-0 top-0 h-1 bg-primary rounded-full" style={{width: `${Math.random()*80 + 10}%`}}></div>
@@ -322,7 +366,7 @@ export default function ChatPage() {
                     ) : (
                       <p className="whitespace-pre-wrap">{msg.text}</p>
                     )}
-                    <p className={`text-xs mt-1 ${isUser ? 'text-right text-chat-bubble-outgoing-foreground/70' : 'text-left text-chat-bubble-incoming-foreground/70'}`}>
+                    <p className={`text-[10px] mt-1.5 ${isUser ? 'text-right text-chat-bubble-outgoing-foreground/70' : 'text-left text-chat-bubble-incoming-foreground/70'}`}>
                       {formatTime(msg.timestamp)}
                     </p>
                   </div>
@@ -334,25 +378,25 @@ export default function ChatPage() {
         </ScrollArea>
 
         <footer className="p-3 border-t border-border bg-card sticky bottom-0 z-10">
-          <div className="flex items-center space-x-2">
+          <div className="flex items-end space-x-2">
              <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
               <PopoverTrigger asChild>
-                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
+                <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full w-10 h-10 shrink-0">
                   <Smile className="h-5 w-5" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-auto max-w-xs sm:max-w-sm md:max-w-md p-0 border-border shadow-xl mb-2 rounded-xl" side="top" align="start">
-                <ScrollArea className="h-[250px] sm:h-[300px] p-2">
+              <PopoverContent className="w-auto max-w-[320px] sm:max-w-sm p-0 border-border shadow-xl mb-2 rounded-xl bg-background" side="top" align="start">
+                <ScrollArea className="h-[280px] sm:h-[320px] p-2">
                   {Object.entries(emojiCategories).map(([category, emojis]) => (
-                    <div key={category} className="mb-2">
-                      <p className="text-xs font-semibold text-muted-foreground px-1 mb-1">{category}</p>
-                      <div className="grid grid-cols-8 sm:grid-cols-9 md:grid-cols-10 gap-0.5">
+                    <div key={category} className="mb-3">
+                      <p className="text-xs font-semibold text-muted-foreground px-1.5 mb-1.5 sticky top-0 bg-background/80 backdrop-blur-sm py-1">{category}</p>
+                      <div className="grid grid-cols-8 sm:grid-cols-9 gap-0.5">
                         {emojis.map((emoji) => (
                           <Button
                             key={emoji}
                             variant="ghost"
-                            className="text-xl p-1 h-auto aspect-square hover:bg-accent/10 rounded-md"
-                            onClick={() => { handleEmojiSelect(emoji); /* setIsEmojiPickerOpen(false); Consider if auto-close is desired */ }}
+                            className="text-xl p-0 h-8 w-8 aspect-square hover:bg-accent/50 rounded-md"
+                            onClick={() => { handleEmojiSelect(emoji); /* setIsEmojiPickerOpen(false); */ }}
                           >
                             {emoji}
                           </Button>
@@ -363,25 +407,26 @@ export default function ChatPage() {
                 </ScrollArea>
               </PopoverContent>
             </Popover>
-             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" onClick={handleGifButtonClick}>
-              <GripHorizontal className="h-5 w-5" /> {/* Placeholder for GIF */}
+             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full w-10 h-10 shrink-0" onClick={handleGifButtonClick}>
+              <GripHorizontal className="h-5 w-5" />
             </Button>
-            <Input
-              placeholder="Your message"
-              className="flex-1 rounded-full px-4 py-2.5 bg-muted/50 border-transparent focus:border-primary focus:bg-card focus-visible:ring-primary text-sm h-10"
+            <Textarea
+              placeholder="Type a message..."
+              className="flex-1 rounded-xl px-4 py-2.5 bg-secondary border-transparent focus:bg-card focus:border-primary focus-visible:ring-primary text-sm min-h-[40px] max-h-[120px] resize-none"
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey ? (e.preventDefault(), handleSendMessage()) : null}
+              onKeyDown={handleTextareaKeyPress} // Use onKeyDown for Enter key
+              rows={1}
             />
-             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" onClick={handleAttachmentClick}>
+             <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-full w-10 h-10 shrink-0" onClick={handleAttachmentClick}>
               <Paperclip className="h-5 w-5" />
             </Button>
              {newMessage.trim() ? (
-              <Button size="icon" className="rounded-full bg-primary hover:bg-primary/90 text-primary-foreground w-10 h-10 shrink-0" onClick={handleSendMessage}>
+              <Button size="icon" className="rounded-full bg-primary hover:bg-primary/90 text-primary-foreground w-10 h-10 shrink-0 shadow-md" onClick={handleSendMessage}>
                 <Send className="h-5 w-5" />
               </Button>
              ) : (
-              <Button size="icon" variant="ghost" className="rounded-full text-muted-foreground hover:text-primary w-10 h-10 shrink-0" onClick={handleVoiceMessageClick}>
+              <Button size="icon" className="rounded-full bg-primary hover:bg-primary/90 text-primary-foreground w-10 h-10 shrink-0 shadow-md" onClick={handleVoiceMessageClick}>
                 <Mic className="h-5 w-5" />
               </Button>
              )}
@@ -394,4 +439,3 @@ export default function ChatPage() {
     </div>
   );
 }
-

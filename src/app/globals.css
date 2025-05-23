@@ -5,101 +5,105 @@
 
 @layer base {
   :root {
-    /* WhatsApp-inspired Theme */
-    --background: 210 20% 98%; /* Very light grey-blue for main app background */
-    --foreground: 240 10% 10%; /* Dark grey for text */
+    /* New Modern Theme */
+    --background: 220 20% 99%; /* Very light, almost white */
+    --foreground: 220 10% 15%; /* Dark cool gray for text */
 
     --card: 0 0% 100%; /* White for cards */
-    --card-foreground: 240 10% 10%;
+    --card-foreground: 220 10% 15%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 10%;
+    --popover-foreground: 220 10% 15%;
 
-    --primary: 170 60% 40%; /* WhatsApp Teal/Green */
+    --primary: 210 80% 55%; /* Modern, slightly desaturated Blue */
     --primary-foreground: 0 0% 100%; /* White */
 
-    --secondary: 210 15% 90%; /* Light grey for secondary elements */
-    --secondary-foreground: 240 10% 25%;
+    --secondary: 210 20% 94%; /* Light cool gray for secondary elements */
+    --secondary-foreground: 220 10% 25%;
 
-    --muted: 210 15% 94%; /* Muted background, e.g., inactive elements */
-    --muted-foreground: 240 5% 45%; /* Muted text */
+    --muted: 210 20% 96%; /* Muted background, e.g., inactive elements, slightly darker than secondary */
+    --muted-foreground: 220 10% 45%; /* Muted text */
 
-    --accent: 170 55% 45%; /* Slightly darker teal for accents */
+    --accent: 210 75% 60%; /* A slightly lighter, brighter blue for accents */
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 75% 55%;
+    --destructive: 0 70% 50%; /* Softer Red */
     --destructive-foreground: 0 0% 100%;
 
-    --border: 210 10% 88%; /* Default border color */
-    --input: 0 0% 100%; /* White input backgrounds */
-    --ring: 170 60% 45%; /* Ring color based on primary */
+    --border: 210 15% 88%; /* Default border color */
+    --input: 0 0% 100%; /* White input backgrounds, or very light gray */
+    --ring: 210 80% 60%; /* Ring color based on primary */
 
-    /* Sidebar specific colors (WhatsApp Dark-ish Sidebar) */
-    --sidebar-background: 210 10% 15%; /* Dark Grey-Blue */
-    --sidebar-foreground: 0 0% 90%; /* Light grey/white text */
-    --sidebar-primary: 170 50% 50%; /* Teal for active sidebar item */
+    /* Sidebar specific colors */
+    --sidebar-background: 220 15% 97%; /* Very light cool gray, almost off-white */
+    --sidebar-foreground: 220 10% 25%; /* Darker gray text for sidebar */
+    --sidebar-primary: 210 80% 55%; /* Primary blue for active sidebar item */
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 210 10% 25%; /* Slightly lighter dark grey for hover */
-    --sidebar-accent-foreground: 0 0% 95%;
-    --sidebar-border: 210 10% 20%;
-    --sidebar-ring: 170 60% 45%;
+    --sidebar-accent: 210 20% 90%; /* Lighter gray for hover */
+    --sidebar-accent-foreground: 220 10% 15%;
+    --sidebar-border: 210 15% 88%;
+    --sidebar-ring: 210 80% 60%;
     
     /* Chat specific colors */
-    --chat-background-color: 200 30% 92%; /* Very light grey-blue for chat area, or use image */
-    /* Example: --chat-background-image: url('/path/to/whatsapp-doodle-pattern.png'); */
-    --chat-bubble-outgoing-background: 195 60% 88%; /* Light Greenish-Blue */
-    --chat-bubble-outgoing-foreground: 240 10% 10%;
-    --chat-bubble-incoming-background: 0 0% 100%; /* White */
-    --chat-bubble-incoming-foreground: 240 10% 10%;
+    --chat-background-color: 220 25% 98%; /* Very light blue-gray for chat area */
+    --chat-bubble-outgoing-background: 210 80% 55%; /* Primary Blue */
+    --chat-bubble-outgoing-foreground: 0 0% 100%;
+    --chat-bubble-incoming-background: 220 20% 92%; /* Light Gray */
+    --chat-bubble-incoming-foreground: 220 10% 15%;
     
-    --group-info-background: 210 30% 97%; /* Very light grey for Group Info panel */
-    --group-info-foreground: 240 10% 20%;
+    --group-info-background: 220 20% 97%; /* Light gray for Group Info panel */
+    --group-info-foreground: 220 10% 20%;
 
-    --radius: 0.75rem;
+    --radius: 0.5rem; /* Slightly less rounded for a more modern feel */
     --header-height: 3.5rem; /* 56px */
   }
 
   .dark {
-    /* Dark Theme (Conceptual - can be refined) */
-    --background: 210 10% 12%; 
-    --foreground: 0 0% 90%;
+    /* Dark Theme (Conceptual - to be refined if explicitly requested) */
+    --background: 220 10% 10%; 
+    --foreground: 210 10% 85%;
 
-    --card: 210 10% 18%; 
-    --card-foreground: 0 0% 90%;
+    --card: 220 10% 15%; 
+    --card-foreground: 210 10% 85%;
 
-    --popover: 210 10% 18%;
-    --popover-foreground: 0 0% 90%;
+    --popover: 220 10% 12%;
+    --popover-foreground: 210 10% 85%;
 
-    --primary: 170 55% 50%; 
-    --primary-foreground: 0 0% 100%;
+    --primary: 210 70% 60%; 
+    --primary-foreground: 220 10% 5%;
 
-    --secondary: 210 10% 28%; 
-    --secondary-foreground: 0 0% 85%;
+    --secondary: 220 10% 20%; 
+    --secondary-foreground: 210 10% 75%;
 
-    --muted: 210 10% 22%;
-    --muted-foreground: 0 0% 65%;
+    --muted: 220 10% 18%;
+    --muted-foreground: 210 10% 55%;
 
-    --accent: 170 50% 55%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 210 65% 65%;
+    --accent-foreground: 220 10% 5%;
 
-    --border: 210 10% 28%;
-    --input: 210 10% 20%;
-    --ring: 170 55% 50%;
+    --destructive: 0 60% 50%;
+    --destructive-foreground: 0 0% 100%;
 
-    --sidebar-background: 210 10% 10%;
-    --sidebar-foreground: 0 0% 92%;
-    --sidebar-primary: 170 50% 45%;
-    --sidebar-accent: 210 10% 20%;
+    --border: 220 10% 25%;
+    --input: 220 10% 18%;
+    --ring: 210 70% 60%;
+
+    --sidebar-background: 220 10% 8%;
+    --sidebar-foreground: 210 10% 88%;
+    --sidebar-primary: 210 70% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 10% 18%;
+    --sidebar-accent-foreground: 210 10% 90%;
+    --sidebar-border: 220 10% 20%;
     
-    --chat-background-color: 210 10% 15%;
-    /* Example: --chat-background-image-dark: url('/path/to/whatsapp-doodle-pattern-dark.png'); */
-    --chat-bubble-outgoing-background: 170 40% 30%; /* Darker Teal/Green */
+    --chat-background-color: 220 10% 12%;
+    --chat-bubble-outgoing-background: 210 60% 40%; 
     --chat-bubble-outgoing-foreground: 0 0% 95%;
-    --chat-bubble-incoming-background: 210 10% 25%; 
-    --chat-bubble-incoming-foreground: 0 0% 90%;
+    --chat-bubble-incoming-background: 220 10% 22%; 
+    --chat-bubble-incoming-foreground: 210 10% 88%;
 
-    --group-info-background: 210 15% 20%; 
-    --group-info-foreground: 0 0% 85%;
+    --group-info-background: 220 10% 14%; 
+    --group-info-foreground: 210 10% 80%;
   }
 }
 
@@ -110,24 +114,17 @@
   body {
     @apply bg-background text-foreground;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    /* General app background pattern (subtle) - can be removed if chat-bg takes over full screen */
-    /* background-image: url("data:image/svg+xml,%3Csvg width='52' height='26' viewBox='0 0 52 26' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill-rule='evenodd'%3E%3Cg fill='%23d0d0e0' fill-opacity='0.05'%3E%3Cpath d='M10 10c0-2.21-1.79-4-4-4-3.314 0-6-2.686-6-6h2c0 2.21 1.79 4 4 4 3.314 0 6 2.686 6 6 0 2.21 1.79 4 4 4 3.314 0 6 2.686 6 6 0 2.21 1.79 4 4 4v2c-3.314 0-6-2.686-6-6 0-2.21-1.79-4-4-4-3.314 0-6-2.686-6-6zm25.464-1.95l8.486 8.486-1.414 1.414-8.486-8.486 1.414-1.414zM41.95 17.05l8.486 8.486-1.414 1.414-8.486-8.486 1.414-1.414zM6 22c0 2.21-1.79 4-4 4v2c3.314 0 6-2.686 6-6 0-2.21 1.79-4 4-4 3.314 0 6-2.686 6-6 0-2.21 1.79-4 4-4h2c-3.314 0-6 2.686-6 6 0 2.21-1.79 4-4 4-3.314 0-6 2.686-6 6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E"); */
+    /* Remove complex SVG background for a cleaner look, can be re-added if desired */
   }
   .chat-bg {
     background-color: hsl(var(--chat-background-color)); /* Fallback color */
-    /* If you have a doodle pattern image for chat background: */
-    /* background-image: var(--chat-background-image, none); */
-    /* background-repeat: repeat; */
-    /* background-size: auto; */
+    /* Optional: Add a very subtle pattern if desired, e.g., a light noise texture */
+    /* background-image: url('/path/to/subtle-chat-pattern.png'); */
   }
-  .bg-whatsapp-auth {
-    background-image: linear-gradient(to bottom, hsl(220, 40%, 12%), hsl(210, 35%, 10%));
-    /* To add the doodle pattern from the image, you would need a tileable version of it.
-       Example (replace with your actual image path if you have one):
-       background-image: linear-gradient(to bottom, hsl(220, 40%, 12%, 0.95), hsl(210, 35%, 10%, 0.95)), url('/path/to/your-doodle-pattern.png');
-       background-blend-mode: overlay; // Or another blend mode
-       background-repeat: repeat;
-       background-size: 400px auto; // Adjust size as needed
+  .bg-auth-page { /* New class for auth page backgrounds */
+    background-color: hsl(var(--secondary)); /* Use secondary for a clean, light auth page bg */
+    /* Or a subtle gradient:
+    background-image: linear-gradient(to bottom right, hsl(var(--background)), hsl(var(--secondary)));
     */
   }
 }
@@ -135,15 +132,15 @@
 /* For Shadcn UI Chart theming */
 @layer Chart {
   :root {
-    --chart-1: 170 60% 45%; /* Primary Teal */
-    --chart-2: 250 70% 60%; /* Accent Purple/Blue from original design */
+    --chart-1: 210 80% 55%; /* Primary Blue */
+    --chart-2: 250 70% 60%; /* Accent Purple/Blue */
     --chart-3: 30 90% 55%;  /* Orange */
     --chart-4: 280 80% 65%; /* Violet */
     --chart-5: 120 50% 50%; /* Green */
   }
  
   .dark {
-    --chart-1: 170 55% 50%;
+    --chart-1: 210 70% 60%;
     --chart-2: 250 65% 65%;
     --chart-3: 30 85% 60%;
     --chart-4: 280 75% 70%;

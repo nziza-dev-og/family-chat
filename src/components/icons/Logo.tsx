@@ -1,26 +1,22 @@
 
 import type { SVGProps } from 'react';
-import { cn } from '@/lib/utils'; // Import cn
+import { cn } from '@/lib/utils'; 
 
-// A simple abstract triangle logo, similar to the example image's top-left logo
+// A simple abstract chat bubble like logo
 export function Logo(props: SVGProps<SVGSVGElement>) {
   const { className, ...rest } = props;
-  // Default fill to --sidebar-primary-foreground if on dark sidebar, or --primary if on light bg
-  // This is a simplification; true context awareness is harder.
-  // Consumers can override fill directly.
-  const fill = props.fill || 'currentColor'; // Simpler: use CSS to set color via text-color
-
+  
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24" // Simple square viewBox
+      viewBox="0 0 24 24"
       width={props.width || "28"} 
       height={props.height || "28"}
-      aria-label="App Logo"
-      className={cn("fill-current", className)} // Allow overriding fill via text color
+      aria-label="ChatApp Logo"
+      className={cn("fill-current", className)} // Default to currentColor for fill
       {...rest}
     >
-      <path d="M12 2L2 22H22L12 2Z" />
+      <path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2ZM20 16H5.17L4 17.17V4H20V16Z"/>
     </svg>
   );
 }

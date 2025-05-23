@@ -1,13 +1,11 @@
 
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Search, UserPlus, Loader2, MessageSquarePlus, Users, Settings, FolderArchive, MessageSquareText } from "lucide-react";
+import { PlusCircle, Search, Loader2, MessageSquarePlus, MessageSquareText } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useParams, usePathname } from "next/navigation"; // Added useParams, usePathname
+import { useRouter, useParams, usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
@@ -17,12 +15,10 @@ import { useToast } from "@/hooks/use-toast";
 import { getAllUsers, addFriend, getOrCreateChatWithUser, getUserChats, type ChatUser, type ChatListItem } from "@/lib/chatActions";
 import { cn } from "@/lib/utils";
 
-// This component now represents the left panel (Chat List)
 function ChatListPanel() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
-  const pathname = usePathname(); // to get current full path
-  const params = useParams(); // to get current dynamic route params like chatId
+  const params = useParams();
   const currentChatId = params?.chatId as string | undefined;
   const { toast } = useToast();
 
@@ -33,7 +29,6 @@ function ChatListPanel() {
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchChatTerm, setSearchChatTerm] = useState("");
-
 
   useEffect(() => {
     if (user && !authLoading) {
@@ -72,11 +67,23 @@ function ChatListPanel() {
     if (!user || !friend.uid) return;
     try {
       await addFriend(user.uid, friend.uid);
-      toast({ title: "Friend Added", description: `${friend.displayName} is now your friend.` });
+      toast({ title: "Friend Added", description: `${friend.displayName} is now your friend. You can see each other's statuses.` });
       
       const newChatId = await getOrCreateChatWithUser(user.uid, friend.uid);
       setIsAddUserModalOpen(false);
       setSearchTerm("");
+      // Optimistically add to chat list or refresh
+      const newChatListItem: ChatListItem = {
+        id: newChatId,
+        name: friend.displayName,
+        avatar: friend.photoURL,
+        dataAiHint: "person portrait",
+        isGroup: false,
+        otherUserId: friend.uid,
+        lastMessage: "Chat started",
+        time: "Now"
+      };
+      setChats(prev => [newChatListItem, ...prev.filter(c => c.id !== newChatId)]);
       router.push(`/chats/${newChatId}`);
     } catch (error: any) {
       console.error("Failed to add friend or start chat:", error);
@@ -92,47 +99,46 @@ function ChatListPanel() {
     ? chats.filter(chat => chat.name?.toLowerCase().includes(searchChatTerm.toLowerCase()))
     : chats;
 
-
   if (authLoading) {
     return (
-      <div className="w-full md:w-80 lg:w-96 border-r border-border bg-card p-4 flex flex-col items-center justify-center">
-        <Loader2 className="h-12 w-12 animate-spin text-primary" />
-        <p className="mt-4 text-muted-foreground">Loading chats...</p>
+      <div className="w-full md:w-[320px] lg:w-[360px] border-r border-border bg-card p-4 flex flex-col items-center justify-center h-full">
+        <Loader2 className="h-10 w-10 animate-spin text-primary" />
+        <p className="mt-3 text-muted-foreground">Loading chats...</p>
       </div>
     );
   }
   
   return (
     <div className={cn(
-        "w-full md:w-80 lg:w-96 border-r border-border bg-card flex-col h-full overflow-y-auto",
-        currentChatId ? "hidden md:flex" : "flex" // Hide on mobile if a chat is open
+        "w-full md:w-[320px] lg:w-[360px] border-r border-border bg-card flex-col h-full overflow-y-auto",
+        currentChatId ? "hidden md:flex" : "flex" 
       )}>
       <div className="p-4 sticky top-0 bg-card z-10 border-b border-border">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold">All chats</h1>
+        <div className="flex items-center justify-between mb-3">
+          <h1 className="text-xl font-semibold text-foreground">Chats</h1>
           <Dialog open={isAddUserModalOpen} onOpenChange={(isOpen) => {
             setIsAddUserModalOpen(isOpen);
             if (!isOpen) setSearchTerm(""); 
           }}>
             <DialogTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={handleOpenAddUserModal}>
-                <MessageSquarePlus className="h-5 w-5 text-primary" />
+              <Button variant="ghost" size="icon" onClick={handleOpenAddUserModal} className="text-primary hover:bg-primary/10">
+                <MessageSquarePlus className="h-5 w-5" />
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
+            <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>Start a new chat</DialogTitle>
                 <DialogDescription>Select a user to start a conversation with.</DialogDescription>
               </DialogHeader>
               <div className="py-2">
                 <Input 
-                  placeholder="Search users..." 
+                  placeholder="Search users by name or email..." 
                   value={searchTerm} 
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="mb-4"
                 />
                 {isLoadingUsers ? (
-                  <div className="flex justify-center items-center h-32">
+                  <div className="flex justify-center items-center h-40">
                     <Loader2 className="h-8 w-8 animate-spin text-primary" />
                   </div>
                 ) : (
@@ -140,19 +146,19 @@ function ChatListPanel() {
                     {filteredUsers.length > 0 ? filteredUsers.map((u) => (
                       <div 
                         key={u.uid} 
-                        className="flex items-center space-x-3 p-2 rounded-md hover:bg-secondary cursor-pointer"
+                        className="flex items-center space-x-3 p-2.5 rounded-lg hover:bg-secondary cursor-pointer transition-colors"
                         onClick={() => handleAddAndChat(u)}
                       >
-                        <Avatar>
+                        <Avatar className="h-10 w-10">
                           <AvatarImage src={u.photoURL || undefined} alt={u.displayName || "User"} data-ai-hint="person portrait" />
-                          <AvatarFallback>{u.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
+                          <AvatarFallback className="bg-muted text-muted-foreground">{u.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-medium text-sm">{u.displayName}</p>
+                          <p className="font-medium text-sm text-card-foreground">{u.displayName}</p>
                           <p className="text-xs text-muted-foreground">{u.email}</p>
                         </div>
                       </div>
-                    )) : <p className="text-center text-muted-foreground">No users found.</p>}
+                    )) : <p className="text-center text-sm text-muted-foreground py-4">No users found.</p>}
                   </ScrollArea>
                 )}
               </div>
@@ -163,10 +169,10 @@ function ChatListPanel() {
           </Dialog>
         </div>
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input 
-            placeholder="Search chats..." 
-            className="pl-10"
+            placeholder="Search or start new chat" 
+            className="pl-10 rounded-full h-10 bg-secondary border-transparent focus:bg-card focus:border-primary"
             value={searchChatTerm}
             onChange={(e) => setSearchChatTerm(e.target.value)}
           />
@@ -176,31 +182,31 @@ function ChatListPanel() {
       <ScrollArea className="flex-1">
         <div className="divide-y divide-border">
           {isLoadingChats ? (
-            <div className="p-4 text-center text-muted-foreground">Loading...</div>
+            <div className="p-4 text-center text-muted-foreground">Loading chats...</div>
           ) : filteredChats.length > 0 ? filteredChats.map((chat) => (
             <Link href={`/chats/${chat.id}`} key={chat.id} passHref
                   className={cn(
-                    "block hover:bg-muted/50",
-                    currentChatId === chat.id && "bg-muted"
+                    "block hover:bg-secondary/70 focus-visible:bg-secondary/70 focus-visible:outline-none",
+                    currentChatId === chat.id && "bg-secondary"
                   )}>
-              <div className="p-3 flex items-center space-x-3 cursor-pointer">
-                <Avatar className="h-10 w-10">
+              <div className="p-3.5 flex items-center space-x-3.5 cursor-pointer">
+                <Avatar className="h-11 w-11">
                   <AvatarImage 
                     src={chat.avatar || "https://placehold.co/100x100.png"} 
                     alt={chat.name || "Chat"}
                     data-ai-hint={chat.dataAiHint || "person"}
                   />
-                  <AvatarFallback>{chat.name?.substring(0,1).toUpperCase() || "C"}</AvatarFallback>
+                  <AvatarFallback className="bg-muted text-muted-foreground">{chat.name?.substring(0,1).toUpperCase() || "C"}</AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center">
-                    <p className="font-medium text-sm truncate">{chat.name}</p>
+                    <p className="font-medium text-sm text-card-foreground truncate">{chat.name}</p>
                     <p className="text-xs text-muted-foreground whitespace-nowrap">{chat.time}</p>
                   </div>
                   <div className="flex justify-between items-center mt-0.5">
                     <p className="text-xs text-muted-foreground truncate">{chat.lastMessage}</p>
                     {chat.unread !== undefined && chat.unread > 0 && (
-                      <span className="ml-2 bg-primary text-primary-foreground text-xs font-bold px-1.5 py-0.5 rounded-full h-4 w-4 flex items-center justify-center text-[10px]">
+                      <span className="ml-2 bg-primary text-primary-foreground text-xs font-bold px-1.5 py-0.5 rounded-full h-5 min-w-[1.25rem] flex items-center justify-center text-[10px]">
                         {chat.unread > 9 ? '9+' : chat.unread}
                       </span>
                     )}
@@ -211,7 +217,7 @@ function ChatListPanel() {
           )) : (
             <div className="flex flex-col items-center justify-center h-full text-center p-8">
               <MessageSquareText className="h-12 w-12 text-muted-foreground mb-3" />
-              <p className="text-sm font-medium">No chats yet</p>
+              <p className="text-sm font-medium text-foreground">No chats yet</p>
               <p className="text-xs text-muted-foreground">Start a new conversation to see it here.</p>
             </div>
           )}
@@ -221,7 +227,6 @@ function ChatListPanel() {
   );
 }
 
-// This is the main component for the /chats route
 export default function ChatsPageContainer() {
   const params = useParams();
   const currentChatId = params?.chatId as string | undefined;
@@ -229,18 +234,15 @@ export default function ChatsPageContainer() {
   return (
     <>
       <ChatListPanel />
-      {/* The specific chat view ([chatId]/page.tsx) will be rendered here by the layout if a chat is selected */}
-      {/* If no chat is selected, a placeholder could be shown, or this area could be managed by [chatId]/page.tsx or a specific default child route */}
       {!currentChatId && (
-        <div className="flex-1 items-center justify-center bg-background p-4 hidden md:flex"> {/* Hidden on mobile by default */}
+        <div className="flex-1 items-center justify-center bg-chat-background-color p-4 hidden md:flex">
           <div className="text-center text-muted-foreground">
-            <MessageSquareText size={48} className="mx-auto mb-4" />
-            <p className="text-lg">Select a chat to start messaging</p>
-            <p className="text-sm">or start a new conversation.</p>
+            <MessageSquareText size={64} className="mx-auto mb-6 text-primary/30" />
+            <p className="text-xl font-medium text-foreground">Select a chat to start messaging</p>
+            <p className="text-sm">or click the <MessageSquarePlus className="inline h-4 w-4 mx-0.5"/> icon to start a new conversation.</p>
           </div>
         </div>
       )}
     </>
   );
 }
-

@@ -4,9 +4,9 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Camera, Edit3, Loader2, Plus, FileImage, AlignLeft, X, Link as LinkIcon, Mic } from "lucide-react";
+import { Camera, Edit3, Loader2, Plus, FileImage, AlignLeft, X, Link as LinkIcon, Mic, Play, Pause, Volume2, VolumeX } from "lucide-react";
 import Image from "next/image";
-import { useEffect, useState, useRef, type ChangeEvent } from "react";
+import { useEffect, useState, useRef, type ChangeEvent, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from "@/components/ui/dialog";
@@ -17,7 +17,8 @@ import { addTextStatus, addMediaStatus, getStatusesForUserList, type UserStatusG
 import { getFriends, type ChatUser } from "@/lib/chatActions"; 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils"; // Import cn
+import { cn } from "@/lib/utils"; 
+import { Progress } from "@/components/ui/progress"; // Import Progress
 
 export default function StatusPage() {
   const { user, loading: authLoading } = useAuth();
@@ -43,6 +44,9 @@ export default function StatusPage() {
   const [currentStatusIndex, setCurrentStatusIndex] = useState(0);
   const statusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const videoStatusRef = useRef<HTMLVideoElement>(null);
+  const [isVideoStatusPlaying, setIsVideoStatusPlaying] = useState(true);
+  const [isVideoStatusMuted, setIsVideoStatusMuted] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(0);
 
 
   useEffect(() => {
@@ -130,13 +134,13 @@ export default function StatusPage() {
         setSelectedStatusFile(null); 
         if(statusFileInputRef.current) statusFileInputRef.current.value = "";
       }
-       setStatusMediaUrlInput(""); // Clear URL if file is chosen
+       setStatusMediaUrlInput(""); 
     }
   };
   
   const handleUrlInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     setStatusMediaUrlInput(event.target.value);
-    setSelectedStatusFile(null); // Clear file if URL is typed
+    setSelectedStatusFile(null); 
     setSelectedMediaType(null);
     if(statusFileInputRef.current) statusFileInputRef.current.value = "";
   };
@@ -164,12 +168,13 @@ export default function StatusPage() {
         toast({ title: "Invalid URL", description: "URL must start with http:// or https://.", variant: "destructive" });
         return;
       }
-      if (statusMediaUrlInput.match(/\.(jpeg|jpg|gif|png|webp)$/i) != null) {
+      // Basic check for media type from URL extension
+      if (statusMediaUrlInput.match(/\.(jpeg|jpg|gif|png|webp|avif)$/i) != null) {
          finalMediaType = 'image'; 
-      } else if (statusMediaUrlInput.match(/\.(mp4|webm|ogg)$/i) != null) {
+      } else if (statusMediaUrlInput.match(/\.(mp4|webm|ogg|mov)$/i) != null) {
          finalMediaType = 'video';
       } else {
-         toast({ title: "Unsupported URL", description: "Only direct image/video URLs (.png, .jpg, .mp4 etc.) supported.", variant: "destructive" });
+         toast({ title: "Unsupported URL", description: "Only direct image/video URLs are supported.", variant: "destructive" });
          return;
       }
       mediaToPost = statusMediaUrlInput.trim();
@@ -205,136 +210,191 @@ export default function StatusPage() {
     }
     setViewingStatus(group);
     setCurrentStatusIndex(0);
+    setIsVideoStatusPlaying(true);
+    setVideoProgress(0);
   };
   
-  useEffect(() => {
-    if (statusTimeoutRef.current) {
-        clearTimeout(statusTimeoutRef.current);
-    }
-    if (viewingStatus && viewingStatus.statuses.length > 0) {
-        const current = viewingStatus.statuses[currentStatusIndex];
-        let duration = current.type === 'video' ? 15000 : 5000; 
-        
-        if (current.type === 'video' && videoStatusRef.current) {
-          videoStatusRef.current.currentTime = 0;
-          videoStatusRef.current.play().catch(e => console.error("Error playing video status:", e));
-          // Duration will be handled by 'onEnded' or if video is shorter than 15s, the timeout will kick in.
-          // For very long videos, this timeout acts as a fallback.
-        }
-
-        statusTimeoutRef.current = setTimeout(() => {
-            nextStatus();
-        }, duration);
-    }
-    return () => {
-        if (statusTimeoutRef.current) {
-            clearTimeout(statusTimeoutRef.current);
-        }
-    };
-  }, [viewingStatus, currentStatusIndex]);
-
-
-  const closeStatusViewer = () => {
+ const closeStatusViewer = useCallback(() => {
     if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
+    if (videoStatusRef.current) {
+        videoStatusRef.current.pause();
+    }
     setViewingStatus(null);
-  };
+  }, []);
+
 
   const nextStatus = useCallback(() => {
     setViewingStatus(prevViewingStatus => {
       if (prevViewingStatus && currentStatusIndex < prevViewingStatus.statuses.length - 1) {
         setCurrentStatusIndex(prevIdx => prevIdx + 1);
+        setVideoProgress(0);
+        setIsVideoStatusPlaying(true);
         return prevViewingStatus;
       } else {
         closeStatusViewer();
         return null;
       }
     });
-  }, [currentStatusIndex]);
+  }, [currentStatusIndex, closeStatusViewer]);
 
   const prevStatus = useCallback(() => {
     if (viewingStatus && currentStatusIndex > 0) {
       setCurrentStatusIndex(prev => prev - 1);
+      setVideoProgress(0);
+      setIsVideoStatusPlaying(true);
     }
   }, [viewingStatus, currentStatusIndex]);
+
+
+   useEffect(() => {
+    if (statusTimeoutRef.current) {
+        clearTimeout(statusTimeoutRef.current);
+    }
+    if (viewingStatus && viewingStatus.statuses.length > 0) {
+        const current = viewingStatus.statuses[currentStatusIndex];
+        
+        if (current.type === 'video') {
+            if (videoStatusRef.current) {
+                videoStatusRef.current.currentTime = 0;
+                if (isVideoStatusPlaying) {
+                    videoStatusRef.current.play().catch(e => console.error("Error playing video status:", e));
+                } else {
+                    videoStatusRef.current.pause();
+                }
+            }
+            // Duration will be handled by 'onEnded' or manual navigation for videos.
+            // No automatic timeout for videos unless they fail to play or load.
+        } else { // Image or Text
+            const duration = 5000; // 5 seconds for images/text
+            statusTimeoutRef.current = setTimeout(() => {
+                nextStatus();
+            }, duration);
+        }
+    }
+    return () => {
+        if (statusTimeoutRef.current) {
+            clearTimeout(statusTimeoutRef.current);
+        }
+    };
+  }, [viewingStatus, currentStatusIndex, nextStatus, isVideoStatusPlaying]);
+
+  useEffect(() => {
+    const videoElement = videoStatusRef.current;
+    if (!videoElement) return;
+
+    const handleTimeUpdate = () => {
+      if (videoElement.duration) {
+        setVideoProgress((videoElement.currentTime / videoElement.duration) * 100);
+      }
+    };
+    const handleVideoEnd = () => {
+      nextStatus();
+    };
+
+    videoElement.addEventListener('timeupdate', handleTimeUpdate);
+    videoElement.addEventListener('ended', handleVideoEnd);
+    return () => {
+      videoElement.removeEventListener('timeupdate', handleTimeUpdate);
+      videoElement.removeEventListener('ended', handleVideoEnd);
+    };
+  }, [videoStatusRef, nextStatus, viewingStatus, currentStatusIndex]);
+
 
   const myCurrentStatusGroup = myStatusGroups.length > 0 ? myStatusGroups[0] : null;
   const recentUpdates = friendsStatusGroups.filter(group => group.statuses.length > 0);
 
 
   if (authLoading || !user) {
-    return <div className="flex justify-center items-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2 text-muted-foreground">Loading...</p></div>;
+    return <div className="flex-1 flex justify-center items-center"><Loader2 className="h-10 w-10 animate-spin text-primary" /><p className="ml-3 text-muted-foreground">Loading statuses...</p></div>;
   }
 
   const canPostMedia = activeMediaTab === 'upload' ? !!selectedStatusFile : !!statusMediaUrlInput.trim();
 
-  return (
-    <div className="flex flex-col h-full bg-card md:bg-background"> {/* Match card bg for mobile list */}
-      <CardHeader className="px-4 py-4 border-b border-border sticky top-0 bg-card z-10 md:hidden">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-xl font-semibold">Status</CardTitle>
-          {/* Add actions if needed for mobile header */}
-        </div>
-      </CardHeader>
+  const currentViewedStatus = viewingStatus?.statuses[currentStatusIndex];
 
+  const toggleVideoPlayPause = () => {
+    if (videoStatusRef.current) {
+      if (videoStatusRef.current.paused || videoStatusRef.current.ended) {
+        videoStatusRef.current.play();
+        setIsVideoStatusPlaying(true);
+      } else {
+        videoStatusRef.current.pause();
+        setIsVideoStatusPlaying(false);
+      }
+    }
+  };
+
+  const toggleVideoMute = () => {
+    if (videoStatusRef.current) {
+      videoStatusRef.current.muted = !videoStatusRef.current.muted;
+      setIsVideoStatusMuted(videoStatusRef.current.muted);
+    }
+  };
+
+
+  return (
+    <div className="flex flex-col h-full">
       {isLoadingStatus ? (
         <div className="flex-1 flex justify-center items-center">
           <Loader2 className="h-10 w-10 animate-spin text-primary" />
         </div>
       ) : (
-        <ScrollArea className="flex-1 md:p-4 lg:p-6">
-          <Card 
-            className="mb-1 shadow-none border-0 border-b md:rounded-lg md:border md:shadow-sm hover:bg-secondary/30 cursor-pointer"
-             onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName || "Me", userAvatar: user.photoURL, dataAiHint: "person portrait" })}
-          >
-            <CardContent className="p-3 flex items-center space-x-3">
-              <div className="relative">
-                <Avatar className={`h-12 w-12 ${myCurrentStatusGroup && myCurrentStatusGroup.statuses.length > 0 ? 'ring-2 ring-primary ring-offset-2 ring-offset-card' : 'ring-2 ring-muted ring-offset-2 ring-offset-card'}`}>
-                  <AvatarImage src={user.photoURL || undefined} alt="My Status" data-ai-hint="person portrait" />
-                  <AvatarFallback>{user.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
-                </Avatar>
-                {(!myCurrentStatusGroup || myCurrentStatusGroup.statuses.length === 0) && (
-                     <button 
-                        onClick={(e) => { e.stopPropagation(); setIsMediaStatusModalOpen(true);}} 
-                        className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center border-2 border-card cursor-pointer hover:bg-primary/80 shadow-md"
-                        aria-label="Add status"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                     </button>
-                )}
-              </div>
-              <div className="flex-1">
-                <p className="font-semibold">My Status</p>
-                <p className="text-sm text-muted-foreground">
-                  {myCurrentStatusGroup && myCurrentStatusGroup.statuses.length > 0 ? 
-                    `${myCurrentStatusGroup.statuses.length} update${myCurrentStatusGroup.statuses.length !== 1 ? 's' : ''} \u00B7 ${myCurrentStatusGroup.lastStatusTime}` 
-                    : "Tap to add status update"}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+        <ScrollArea className="flex-1">
+          <div className="p-3 md:p-4">
+            <Card 
+              className="mb-3 shadow-sm hover:bg-secondary/30 cursor-pointer transition-colors rounded-lg"
+              onClick={() => openStatusViewer(myCurrentStatusGroup || { userId: user.uid, statuses: [], userName: user.displayName || "Me", userAvatar: user.photoURL, dataAiHint: "person portrait" })}
+            >
+              <CardContent className="p-3 flex items-center space-x-3.5">
+                <div className="relative">
+                  <Avatar className={`h-12 w-12 ${myCurrentStatusGroup && myCurrentStatusGroup.statuses.length > 0 ? 'ring-2 ring-primary ring-offset-2 ring-offset-card' : 'ring-2 ring-muted ring-offset-2 ring-offset-card'}`}>
+                    <AvatarImage src={user.photoURL || undefined} alt="My Status" data-ai-hint="person portrait" />
+                    <AvatarFallback className="bg-muted text-muted-foreground">{user.displayName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
+                  </Avatar>
+                  {(!myCurrentStatusGroup || myCurrentStatusGroup.statuses.length === 0) && (
+                       <button 
+                          onClick={(e) => { e.stopPropagation(); setIsMediaStatusModalOpen(true);}} 
+                          className="absolute -bottom-1 -right-1 h-7 w-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center border-2 border-card cursor-pointer hover:bg-primary/80 shadow-md"
+                          aria-label="Add status"
+                        >
+                          <Plus className="h-4 w-4" />
+                       </button>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <p className="font-semibold text-card-foreground">My Status</p>
+                  <p className="text-sm text-muted-foreground">
+                    {myCurrentStatusGroup && myCurrentStatusGroup.statuses.length > 0 ? 
+                      `${myCurrentStatusGroup.statuses.length} update${myCurrentStatusGroup.statuses.length !== 1 ? 's' : ''} \u00B7 ${myCurrentStatusGroup.lastStatusTime}` 
+                      : "Tap to add status update"}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
 
-          {recentUpdates.length > 0 && (
-            <div className="py-2 md:mt-4">
-              <h3 className="px-3 text-sm font-semibold text-muted-foreground mb-1">Recent updates</h3>
-              {recentUpdates.map((group) => (
-                <Card key={group.userId} 
-                  className="mb-0.5 shadow-none border-0 border-b md:rounded-lg md:border md:shadow-sm md:mb-2 hover:bg-secondary/30 cursor-pointer"
-                  onClick={() => openStatusViewer(group)}
-                >
-                  <CardContent className="p-3 flex items-center space-x-3">
-                     <Avatar className="h-12 w-12 ring-2 ring-primary ring-offset-2 ring-offset-card">
-                      <AvatarImage src={group.userAvatar || undefined} alt={group.userName || "User"} data-ai-hint={group.dataAiHint || "person"} />
-                      <AvatarFallback>{group.userName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <p className="font-semibold">{group.userName}</p>
-                      <p className="text-sm text-muted-foreground">{group.lastStatusTime}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+            {recentUpdates.length > 0 && (
+              <div className="py-2">
+                <h3 className="px-1 text-sm font-semibold text-muted-foreground mb-1.5">Recent updates</h3>
+                {recentUpdates.map((group) => (
+                  <Card key={group.userId} 
+                    className="mb-2 shadow-sm hover:bg-secondary/30 cursor-pointer transition-colors rounded-lg"
+                    onClick={() => openStatusViewer(group)}
+                  >
+                    <CardContent className="p-3 flex items-center space-x-3.5">
+                       <Avatar className="h-12 w-12 ring-2 ring-primary ring-offset-2 ring-offset-card">
+                        <AvatarImage src={group.userAvatar || undefined} alt={group.userName || "User"} data-ai-hint={group.dataAiHint || "person"} />
+                        <AvatarFallback className="bg-muted text-muted-foreground">{group.userName?.substring(0,1).toUpperCase() || "U"}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <p className="font-semibold text-card-foreground">{group.userName}</p>
+                        <p className="text-sm text-muted-foreground">{group.lastStatusTime}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </ScrollArea>
       )}
       
@@ -348,7 +408,7 @@ export default function StatusPage() {
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Add Text Status</DialogTitle>
-                    <DialogDescription>Write something to share.</DialogDescription>
+                    <DialogDescription>Write something to share with your friends.</DialogDescription>
                 </DialogHeader>
                 <Textarea 
                     placeholder="What's on your mind?" 
@@ -385,7 +445,7 @@ export default function StatusPage() {
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle>Add Media Status</DialogTitle>
-                    <DialogDescription>Share a photo or video.</DialogDescription>
+                    <DialogDescription>Share a photo or video with your friends.</DialogDescription>
                 </DialogHeader>
                  <Tabs defaultValue="upload" value={activeMediaTab} onValueChange={(value) => setActiveMediaTab(value as 'upload' | 'url')} className="my-4">
                     <TabsList className="grid w-full grid-cols-2">
@@ -395,7 +455,7 @@ export default function StatusPage() {
                     <TabsContent value="upload" className="py-4 space-y-4">
                       <div>
                         <Label htmlFor="status-media-upload">Choose image or video</Label>
-                        <Input id="status-media-upload" type="file" accept="image/*,video/*" onChange={handleStatusFileChange} ref={statusFileInputRef} />
+                        <Input id="status-media-upload" type="file" accept="image/*,video/*" onChange={handleStatusFileChange} ref={statusFileInputRef} className="mt-1"/>
                         {selectedStatusFile && <p className="text-sm text-muted-foreground mt-2">Selected: {selectedStatusFile.name} ({selectedMediaType})</p>}
                       </div>
                     </TabsContent>
@@ -407,6 +467,7 @@ export default function StatusPage() {
                           placeholder="https://example.com/media.png" 
                           value={statusMediaUrlInput}
                           onChange={handleUrlInputChange}
+                           className="mt-1"
                         />
                        </div>
                     </TabsContent>
@@ -419,6 +480,7 @@ export default function StatusPage() {
                     value={statusMediaCaption}
                     onChange={(e) => setStatusMediaCaption(e.target.value)}
                     rows={3}
+                    className="mt-1"
                   />
                 </div>
                  <DialogFooter>
@@ -431,107 +493,116 @@ export default function StatusPage() {
         </Dialog>
       </div>
 
-      {viewingStatus && viewingStatus.statuses.length > 0 && (
+       {viewingStatus && viewingStatus.statuses.length > 0 && currentViewedStatus && (
         <div 
-            className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-between p-0 select-none"
+            className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-start p-0 select-none"
             onClick={(e) => { e.stopPropagation(); /* Backdrop click handled by nav areas */}} 
         >
-            <div className="w-full pt-3 px-2 md:pt-4 md:px-4">
-              {viewingStatus.statuses.length > 1 && (
-                <div className="flex space-x-1 w-full max-w-2xl mx-auto mb-2">
-                  {viewingStatus.statuses.map((_, idx) => (
-                    <div key={idx} className="h-0.5 flex-1 bg-white/30 rounded-full overflow-hidden relative">
-                      <div 
-                        className={cn(
-                          "h-full bg-white absolute top-0 left-0",
-                          idx < currentStatusIndex ? 'w-full' : 'w-0',
-                          idx === currentStatusIndex && 'animate-progress-fill-status'
+            {/* Progress Bars */}
+            {viewingStatus.statuses.length > 1 && (
+              <div className="flex space-x-1 w-full max-w-2xl mx-auto pt-3 px-2 md:pt-4 md:px-4 z-[52]">
+                {viewingStatus.statuses.map((_, idx) => (
+                    <div key={idx} className="h-1 flex-1 bg-white/30 rounded-full overflow-hidden relative">
+                        {idx < currentStatusIndex && <div className="h-full bg-white w-full absolute top-0 left-0" />}
+                        {idx === currentStatusIndex && (
+                            currentViewedStatus.type === 'video' ?
+                            <Progress value={videoProgress} className="h-full w-full [&>div]:bg-white bg-transparent" />
+                            :
+                            <div 
+                                className="h-full bg-white absolute top-0 left-0 animate-progress-fill-status"
+                                style={{ animationDuration: '5s' }} 
+                            />
                         )}
-                        style={{ 
-                          animationDuration: idx === currentStatusIndex ? (viewingStatus.statuses[currentStatusIndex]?.type === 'video' ? (videoStatusRef.current?.duration ? `${videoStatusRef.current.duration}s` : '15s') : '5s') : undefined,
-                         }} 
-                      />
                     </div>
-                  ))}
-                </div>
-              )}
-              <style jsx global>{`
-                @keyframes progressFillAnimStatus { /* Renamed to avoid conflict */
-                  from { width: 0%; }
-                  to { width: 100%; }
-                }
-                .animate-progress-fill-status {
-                  animation-name: progressFillAnimStatus;
-                  animation-timing-function: linear;
-                  animation-fill-mode: forwards;
-                }
-              `}</style>
-
-              <div className="flex items-center justify-between w-full max-w-2xl mx-auto">
-                  <div className="flex items-center space-x-2">
-                      <Avatar className="h-8 w-8 border border-white/30">
-                          <AvatarImage src={viewingStatus.userAvatar || undefined} data-ai-hint={viewingStatus.dataAiHint || "person"}/>
-                          <AvatarFallback className="bg-gray-700 text-white text-xs">{viewingStatus.userName?.substring(0,1).toUpperCase()}</AvatarFallback>
-                      </Avatar>
-                      <div>
-                          <p className="text-white font-semibold text-sm">{viewingStatus.userName}</p>
-                          <p className="text-xs text-gray-300">{formatStatusTimestamp(viewingStatus.statuses[currentStatusIndex].createdAt.toDate())}</p>
-                      </div>
-                  </div>
-                  <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 rounded-full" onClick={(e) => { e.stopPropagation(); closeStatusViewer(); }}>
-                      <X className="h-5 w-5"/>
-                  </Button>
+                ))}
               </div>
+            )}
+            <style jsx global>{`
+              @keyframes progressFillAnimStatus { 
+                from { width: 0%; }
+                to { width: 100%; }
+              }
+              .animate-progress-fill-status {
+                animation-name: progressFillAnimStatus;
+                animation-timing-function: linear;
+                animation-fill-mode: forwards;
+              }
+            `}</style>
+
+            {/* Header */}
+            <div className="flex items-center justify-between w-full max-w-2xl mx-auto py-2 px-2 md:px-4 z-[52]">
+                <div className="flex items-center space-x-2.5">
+                    <Avatar className="h-9 w-9 border border-white/40">
+                        <AvatarImage src={viewingStatus.userAvatar || undefined} data-ai-hint={viewingStatus.dataAiHint || "person"}/>
+                        <AvatarFallback className="bg-gray-700 text-white text-sm">{viewingStatus.userName?.substring(0,1).toUpperCase()}</AvatarFallback>
+                    </Avatar>
+                    <div>
+                        <p className="text-white font-semibold text-sm">{viewingStatus.userName}</p>
+                        <p className="text-xs text-gray-300">{formatStatusTimestamp(currentViewedStatus.createdAt.toDate())}</p>
+                    </div>
+                </div>
+                <div className="flex items-center gap-1">
+                    {currentViewedStatus.type === 'video' && videoStatusRef.current && (
+                        <>
+                        <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 rounded-full h-9 w-9" onClick={(e) => {e.stopPropagation(); toggleVideoPlayPause();}}>
+                            {isVideoStatusPlaying ? <Pause className="h-4 w-4"/> : <Play className="h-4 w-4"/>}
+                        </Button>
+                        <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 rounded-full h-9 w-9" onClick={(e) => {e.stopPropagation(); toggleVideoMute();}}>
+                             {isVideoStatusMuted ? <VolumeX className="h-4 w-4"/> : <Volume2 className="h-4 w-4"/>}
+                        </Button>
+                        </>
+                    )}
+                    <Button variant="ghost" size="icon" className="text-white hover:bg-white/20 rounded-full h-9 w-9" onClick={(e) => { e.stopPropagation(); closeStatusViewer(); }}>
+                        <X className="h-5 w-5"/>
+                    </Button>
+                </div>
             </div>
             
+            {/* Content Area */}
             <div className="relative w-full flex-1 flex items-center justify-center overflow-hidden my-2" onClick={(e) => e.stopPropagation()}>
-                {viewingStatus.statuses[currentStatusIndex].type === 'image' ? (
+                {currentViewedStatus.type === 'image' ? (
                     <div className="flex flex-col items-center justify-center max-h-full max-w-full">
                         <Image 
-                            src={viewingStatus.statuses[currentStatusIndex].content} 
+                            src={currentViewedStatus.content} 
                             alt="Status image" 
                             layout="intrinsic" 
                             width={1080} 
-                            height={1920} // Using a common portrait aspect ratio
+                            height={1920}
                             objectFit="contain"
-                            className="max-h-[calc(100vh-150px)] max-w-full rounded-none md:rounded-lg shadow-lg" 
-                            data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status image"}
+                            className="max-h-[calc(100vh-160px)] max-w-full rounded-none md:rounded-md shadow-lg" 
+                            data-ai-hint={currentViewedStatus.dataAiHint || "status image"}
                             priority 
                         />
                     </div>
-                ) : viewingStatus.statuses[currentStatusIndex].type === 'video' ? (
+                ) : currentViewedStatus.type === 'video' ? (
                      <div className="flex flex-col items-center justify-center max-h-full max-w-full w-full h-full">
                         <video
                             ref={videoStatusRef}
-                            key={viewingStatus.statuses[currentStatusIndex].id} // Force re-render for new video
-                            src={viewingStatus.statuses[currentStatusIndex].content}
+                            key={currentViewedStatus.id}
+                            src={currentViewedStatus.content}
                             controls={false}
-                            autoPlay
+                            autoPlay={isVideoStatusPlaying}
+                            muted={isVideoStatusMuted}
                             playsInline 
-                            className="max-h-[calc(100vh-150px)] max-w-full md:rounded-lg bg-black shadow-lg w-auto h-auto object-contain"
-                            data-ai-hint={viewingStatus.statuses[currentStatusIndex].dataAiHint || "status video"}
-                            onEnded={nextStatus}
-                            onLoadedMetadata={(e) => { // Adjust progress bar duration based on video length
-                              if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-                              const duration = e.currentTarget.duration;
-                              statusTimeoutRef.current = setTimeout(nextStatus, duration * 1000);
-                            }}
+                            className="max-h-[calc(100vh-160px)] max-w-full md:rounded-md bg-black shadow-lg w-auto h-auto object-contain"
+                            data-ai-hint={currentViewedStatus.dataAiHint || "status video"}
+                            // onEnded={nextStatus} // Handled by useEffect on videoElement
                         />
                     </div>
                 ) : ( 
-                    <div className="bg-gradient-to-br from-purple-500 to-indigo-600 p-8 rounded-lg text-center max-w-md w-[90vw] h-auto min-h-[50vh] flex items-center justify-center shadow-2xl">
-                        <p className="text-3xl md:text-4xl text-white font-semibold whitespace-pre-wrap break-words">
-                            {viewingStatus.statuses[currentStatusIndex].content}
+                    <div className="bg-gradient-to-br from-blue-500 to-indigo-700 p-8 rounded-none md:rounded-lg text-center max-w-lg w-[95vw] h-auto min-h-[60vh] flex items-center justify-center shadow-2xl">
+                        <p className="text-3xl md:text-4xl lg:text-5xl text-white font-semibold whitespace-pre-wrap break-words leading-tight">
+                            {currentViewedStatus.content}
                         </p>
                     </div>
                 )}
             </div>
             
-            {/* Caption for Image/Video, placed at the bottom */}
-            {(viewingStatus.statuses[currentStatusIndex].type === 'image' || viewingStatus.statuses[currentStatusIndex].type === 'video') && viewingStatus.statuses[currentStatusIndex].caption && (
-                <div className="w-full pb-4 px-2 md:pb-6 md:px-4">
-                  <p className="bg-black/60 text-white text-sm p-2 px-3 rounded-lg max-w-xl mx-auto text-center whitespace-pre-wrap shadow-md">
-                      {viewingStatus.statuses[currentStatusIndex].caption}
+            {/* Caption */}
+            {(currentViewedStatus.type === 'image' || currentViewedStatus.type === 'video') && currentViewedStatus.caption && (
+                <div className="w-full pb-4 px-2 md:pb-6 md:px-4 z-[52]">
+                  <p className="bg-black/70 text-white text-sm p-2.5 px-4 rounded-lg max-w-xl mx-auto text-center whitespace-pre-wrap shadow-md">
+                      {currentViewedStatus.caption}
                   </p>
                 </div>
             )}
