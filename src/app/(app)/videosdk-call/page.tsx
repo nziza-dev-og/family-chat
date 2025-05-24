@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useRef, Suspense, useCallback } from 'react';
 import Head from 'next/head';
+import Script from 'next/script'; // Import Next.js Script component
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
@@ -12,8 +13,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Camera, CameraOff, Mic, MicOff, PhoneOff, Users, Loader2, RefreshCw, AlertCircle } from 'lucide-react';
-import { db } from '@/lib/firebase'; // For potential invite updates
-import { doc, updateDoc, serverTimestamp, getDoc } from 'firebase/firestore'; // For invite updates
+import { db } from '@/lib/firebase';
+import { doc, setDoc, updateDoc, serverTimestamp, getDoc, deleteDoc } from 'firebase/firestore';
+import { addMissedCallMessage } from '@/lib/chatActions';
 
 // Declare VideoSDK on window type
 declare global {
@@ -78,7 +80,7 @@ function VideoSDKCallPageContent() {
         setAuthToken(data.token);
         setCallStatus("Token Ready");
         setError('');
-        return;
+        return data.token; // Return token for immediate use
       }
       
       let detailedErrorMessage = `API route token generation failed with status: ${response.status}`;
@@ -107,39 +109,19 @@ function VideoSDKCallPageContent() {
           });
           setError('');
           setCallStatus("Token Ready (Fallback)");
+          return token; // Return token for immediate use
         } catch (clientTokenError: any) {
             setError(`Failed to generate any token: ${clientTokenError.message}`);
             setCallStatus("Token Error");
+            return null;
         }
       } else {
          setError(apiError.message || "Failed to generate token. API Key might be missing.");
          setCallStatus("Token Error / Config Error");
+         return null;
       }
     }
   }, [API_KEY_FROM_ENV, toast]);
-
-  useEffect(() => {
-    if (API_KEY_FROM_ENV) {
-      generateAuthTokenInternal(); // Generate initial token without meetingId
-    } else {
-      setError("Video SDK API Key is not configured. Video calls are disabled.");
-      setCallStatus("Configuration Error");
-      setSdkLoaded(false);
-    }
-  }, [API_KEY_FROM_ENV, generateAuthTokenInternal]);
-  
-  useEffect(() => {
-    if (user && !authLoading) {
-      setUserName(user.displayName || "Chat User");
-    }
-    if (meetingIdToJoinParam) {
-      setMeetingId(meetingIdToJoinParam);
-      setCallStatus("Ready to join invited meeting");
-    }
-    if (calleeIdParam) {
-      setIsCaller(true);
-    }
-  }, [user, authLoading, meetingIdToJoinParam, calleeIdParam]);
 
   const createClientSideToken = useCallback(() => {
     if (!API_KEY_FROM_ENV) throw new Error("API Key missing for client-side token.");
@@ -153,8 +135,9 @@ function VideoSDKCallPageContent() {
     return `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${encodedPayload}.demo_signature_videosdk_live`;
   }, [API_KEY_FROM_ENV]);
 
-  const createMeetingViaApi = useCallback(async () => {
-    if (!authToken) {
+
+  const createMeetingViaApi = useCallback(async (token: string) => {
+    if (!token) {
       setError("Auth token not available for creating meeting.");
       setCallStatus("Token Error");
       return null;
@@ -164,7 +147,7 @@ function VideoSDKCallPageContent() {
       const response = await fetch('https://api.videosdk.live/v2/rooms', {
         method: 'POST',
         headers: {
-          'Authorization': authToken,
+          'Authorization': token,
           'Content-Type': 'application/json',
         },
       });
@@ -183,7 +166,7 @@ function VideoSDKCallPageContent() {
       setCallStatus("Meeting Creation Error");
       return generateRandomMeetingId();
     }
-  }, [authToken]);
+  }, []);
 
   const generateRandomMeetingId = () => {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -193,6 +176,7 @@ function VideoSDKCallPageContent() {
     }
     return result;
   };
+
 
   const initializeLocalMediaInternal = useCallback(async () => {
     if (localStream) {
@@ -228,15 +212,36 @@ function VideoSDKCallPageContent() {
       setLocalStream(null);
       throw error;
     }
-  }, [isCameraOn, isMicOn, isConnected, localStream]);
+  }, [isCameraOn, isMicOn, isConnected, localStream]); // Added localStream as dep
+
+  useEffect(() => {
+    if (user && !authLoading) {
+      setUserName(user.displayName || "Chat User");
+    }
+    if (meetingIdToJoinParam) {
+      setMeetingId(meetingIdToJoinParam);
+      setCallStatus("Ready to join invited meeting");
+    }
+    if (calleeIdParam) {
+      setIsCaller(true);
+    }
+  }, [user, authLoading, meetingIdToJoinParam, calleeIdParam]);
 
   useEffect(() => {
     if (!isConnected && sdkLoaded && API_KEY_FROM_ENV && !authLoading) {
       initializeLocalMediaInternal().catch(e => console.warn("Initial media preview failed:", e.message));
     }
   }, [isCameraOn, isMicOn, sdkLoaded, isConnected, API_KEY_FROM_ENV, authLoading, initializeLocalMediaInternal]);
+  
+  useEffect(() => {
+    // Generate initial token if not already set and SDK is loaded
+    if (sdkLoaded && !authToken && API_KEY_FROM_ENV) {
+      generateAuthTokenInternal();
+    }
+  }, [sdkLoaded, authToken, API_KEY_FROM_ENV, generateAuthTokenInternal]);
 
-  const actualJoinMeeting = useCallback(async (currentMeetingId: string) => {
+
+  const actualJoinMeeting = useCallback(async (currentMeetingId: string, currentAuthToken: string) => {
     if (!sdkLoaded || !window.VideoSDK) {
       setError('Video SDK is not loaded yet. Please wait or check your connection.');
       setIsJoining(false);
@@ -249,16 +254,11 @@ function VideoSDKCallPageContent() {
       setCallStatus("Configuration Error");
       return;
     }
-    if (!authToken) {
-      // Attempt to generate token if missing, specifically for this meeting ID
-      await generateAuthTokenInternal(currentMeetingId);
-      // Need to re-check authToken after attempt
-      if (!authToken) { // This check might use stale authToken, consider passing the new token
-        setError("Authentication token not available. Cannot join meeting.");
-        setIsJoining(false);
-        setCallStatus("Token Error");
-        return;
-      }
+    if (!currentAuthToken) {
+      setError("Authentication token not available. Cannot join meeting.");
+      setIsJoining(false);
+      setCallStatus("Token Error");
+      return;
     }
 
     setCallStatus("Joining meeting...");
@@ -267,7 +267,7 @@ function VideoSDKCallPageContent() {
       name: userName,
       meetingId: currentMeetingId,
       apiKey: API_KEY_FROM_ENV,
-      token: authToken, // Use the state authToken
+      token: currentAuthToken,
       containerId: 'video-sdk-container',
       redirectOnLeave: false,
       micEnabled: isMicOn,
@@ -286,8 +286,8 @@ function VideoSDKCallPageContent() {
       participantCanLeave: true,
       maxResolution: 'hd',
       debug: process.env.NODE_ENV === 'development',
-      theme: 'DARK',
-      mode: 'CONFERENCE',
+      theme: 'DARK', // You can make this configurable later
+      mode: 'CONFERENCE', // or 'VIEWER'
       multiStream: true,
       layout: { type: 'SPOTLIGHT', priority: 'SPEAKER', gridSize: 4 },
       joinScreen: { visible: true, title: 'Video Call', meetingUrl: typeof window !== "undefined" ? window.location.href : "" },
@@ -303,7 +303,7 @@ function VideoSDKCallPageContent() {
           setIsJoining(false);
           setError('');
           setCallStatus("Connected");
-          if (!isCaller && user && meetingIdToJoinParam && videoContainerRef.current) {
+          if (!isCaller && user && meetingIdToJoinParam && videoContainerRef.current) { // Check if videoContainerRef is relevant here
               try {
                   const inviteDocRef = doc(db, "videoCallInvites", user.uid);
                   const inviteSnap = await getDoc(inviteDocRef);
@@ -316,7 +316,7 @@ function VideoSDKCallPageContent() {
         },
         'meeting-left': () => {
           console.log('[VideoSDK] Meeting left callback triggered');
-          handleLeaveMeetingInternal(true);
+          handleLeaveMeetingInternal(true); // sdkInitiatedLeave = true
         },
          'error': (err: any) => {
           console.error('[VideoSDK] Meeting error:', err);
@@ -341,7 +341,7 @@ function VideoSDKCallPageContent() {
         const container = document.createElement('div');
         container.id = config.containerId;
         container.className = "w-full h-full";
-        videoContainerRef.current.innerHTML = ''; // Clear previous SDK instances if any
+        videoContainerRef.current.innerHTML = '';
         videoContainerRef.current.appendChild(container);
       } else if (!document.getElementById(config.containerId)) {
         console.error(`[VideoSDK] Container with id '${config.containerId}' not found.`);
@@ -353,16 +353,14 @@ function VideoSDKCallPageContent() {
 
       const meeting = window.VideoSDK.initMeeting(config);
       meetingRef.current = meeting;
-      // If joinScreen.visible is true, VideoSDK handles showing its own join UI.
-      // If you want to bypass that and join programmatically, set joinScreen.visible to false
-      // and then call: meeting.join();
     } catch (initError: any) {
       console.error('[VideoSDK] Error initializing meeting:', initError);
       setError(`Meeting initialization failed: ${initError.message}`);
       setCallStatus("Initialization Error");
       setIsJoining(false);
     }
-  }, [API_KEY_FROM_ENV, authToken, userName, isMicOn, isCameraOn, sdkLoaded, isCaller, user, meetingIdToJoinParam, generateAuthTokenInternal]);
+  }, [API_KEY_FROM_ENV, userName, isMicOn, isCameraOn, sdkLoaded, isCaller, user, meetingIdToJoinParam]); // Removed authToken from deps, pass as arg
+
 
   const handleJoinMeetingInternal = useCallback(async () => {
     if (!userName.trim()) {
@@ -374,12 +372,18 @@ function VideoSDKCallPageContent() {
       setCallStatus("Configuration Error");
       return;
     }
-    if (!authToken) {
-      setError('Authentication token not ready. Please wait and try again.');
-      setCallStatus("Token Error");
-      await generateAuthTokenInternal(meetingId.trim() || meetingIdToJoinParam); // Pass meetingId for token generation
-      return; // Wait for token to be set by the effect
+    
+    let currentAuthToken = authToken;
+    if (!currentAuthToken) {
+        setCallStatus("Generating token for join...");
+        currentAuthToken = await generateAuthTokenInternal(meetingId.trim() || meetingIdToJoinParam || undefined);
+        if (!currentAuthToken) {
+            setError('Authentication token could not be generated. Please try again.');
+            setCallStatus("Token Error");
+            return;
+        }
     }
+
 
     setIsJoining(true);
     setError('');
@@ -390,27 +394,32 @@ function VideoSDKCallPageContent() {
       
       if (isCaller && calleeIdParam && chatIdParam && user) {
         if (!finalMeetingId) {
-          finalMeetingId = await createMeetingViaApi() || generateRandomMeetingId();
+          setCallStatus("Caller creating meeting room...");
+          finalMeetingId = await createMeetingViaApi(currentAuthToken) || generateRandomMeetingId();
           setMeetingId(finalMeetingId);
         }
+        if (!finalMeetingId) throw new Error("Failed to create or generate a meeting ID for caller.");
+
         setCallStatus("Sending invite...");
         const inviteRef = doc(db, "videoCallInvites", calleeIdParam);
-        await updateDoc(inviteRef, { status: 'answered', updatedAt: serverTimestamp() }).catch(async () => {
-            await doc(db, "videoCallInvites", calleeIdParam).set({
-                 callerId: user.uid,
-                 callerName: user.displayName || "A user",
-                 callerAvatar: user.photoURL || "",
-                 meetingId: finalMeetingId,
-                 status: 'ringing',
-                 createdAt: serverTimestamp(),
-                 chatId: chatIdParam,
-                 callType: 'videosdk'
-            });
-        });
+        
+        // Ensure we set if it doesn't exist, or update if it does (e.g. user retries invite)
+        await setDoc(inviteRef, { // Use setDoc with merge:true if you want to update an existing, or just set for overwrite
+             callerId: user.uid,
+             callerName: user.displayName || "A user",
+             callerAvatar: user.photoURL || "",
+             meetingId: finalMeetingId,
+             status: 'ringing',
+             createdAt: serverTimestamp(),
+             chatId: chatIdParam,
+             callType: 'videosdk'
+        }, { merge: true }); // Using merge:true to update if exists or create if not
+        
         setInviteSent(true);
         toast({ title: "Calling...", description: `Inviting user to join meeting: ${finalMeetingId}`});
       } else if (!finalMeetingId && !meetingIdToJoinParam) {
-        finalMeetingId = await createMeetingViaApi() || generateRandomMeetingId();
+        setCallStatus("Creating new meeting room...");
+        finalMeetingId = await createMeetingViaApi(currentAuthToken) || generateRandomMeetingId();
         setMeetingId(finalMeetingId);
       } else if (meetingIdToJoinParam) {
         finalMeetingId = meetingIdToJoinParam;
@@ -419,7 +428,7 @@ function VideoSDKCallPageContent() {
       if (!finalMeetingId) throw new Error("Meeting ID is required to join.");
       
       await initializeLocalMediaInternal();
-      await actualJoinMeeting(finalMeetingId);
+      await actualJoinMeeting(finalMeetingId, currentAuthToken);
 
     } catch (error: any) {
       console.error('Failed to join meeting (handleJoinMeetingInternal):', error);
@@ -427,10 +436,18 @@ function VideoSDKCallPageContent() {
       setCallStatus("Join Error");
       setIsJoining(false);
     }
-  }, [userName, API_KEY_FROM_ENV, authToken, generateAuthTokenInternal, meetingId, isCaller, calleeIdParam, chatIdParam, user, createMeetingViaApi, meetingIdToJoinParam, initializeLocalMediaInternal, actualJoinMeeting, toast]);
+  }, [
+      userName, API_KEY_FROM_ENV, authToken, generateAuthTokenInternal, 
+      meetingId, isCaller, calleeIdParam, chatIdParam, user, 
+      createMeetingViaApi, meetingIdToJoinParam, 
+      initializeLocalMediaInternal, actualJoinMeeting, toast
+  ]);
 
-  const handleLeaveMeetingInternal = useCallback((sdkInitiatedLeave = false) => {
-    console.log(`[VideoSDK] handleLeaveMeetingInternal. SDK initiated: ${sdkInitiatedLeave}, Connected: ${isConnected}`);
+  const handleLeaveMeetingInternal = useCallback(async (sdkInitiatedLeave = false) => {
+    console.log(`[VideoSDK] handleLeaveMeetingInternal. SDK initiated: ${sdkInitiatedLeave}, Connected: ${isConnected}, isCaller: ${isCaller}, inviteSent: ${inviteSent}`);
+    
+    const currentMeetingId = meetingId; // Capture meetingId at the time of leaving
+
     if (meetingRef.current && !sdkInitiatedLeave && isConnected) {
       try { meetingRef.current.leave(); } catch (e) { console.warn("[VideoSDK] Error during meetingRef.current.leave():", e); }
     }
@@ -448,23 +465,54 @@ function VideoSDKCallPageContent() {
     setParticipants([]);
     setCallStatus("Disconnected");
     
-    // Missed call logic related to invites can be added here
+    // Caller: If an invite was sent and the call wasn't connected by the callee (or callee left early)
+    // Or if the caller ends the ringing invite explicitly
+    if (isCaller && inviteSent && calleeIdParam && chatIdParam && user) {
+      const inviteDocRef = doc(db, "videoCallInvites", calleeIdParam);
+      try {
+        const inviteSnap = await getDoc(inviteDocRef);
+        if (inviteSnap.exists() && inviteSnap.data()?.meetingId === currentMeetingId) {
+          if (inviteSnap.data()?.status === 'ringing') { // Caller hung up a ringing call
+            await addMissedCallMessage(chatIdParam, 'videosdk', user.uid, calleeIdParam);
+          }
+          // Delete the invite regardless of status if caller leaves
+          await deleteDoc(inviteDocRef);
+          console.log(`[VideoSDK] Invite deleted for callee ${calleeIdParam} by caller ${user.uid}`);
+        }
+      } catch (e) {
+        console.error("[VideoSDK] Error deleting invite or adding missed call:", e);
+      }
+    }
     
+    if (!sdkInitiatedLeave && !wasConnected && isCaller && inviteSent) {
+      // If the caller was trying to join but an error happened before 'meeting-joined',
+      // and an invite was sent, still try to clean up the invite.
+    }
+    
+
     if (!sdkInitiatedLeave) {
+        // For user-initiated leave, redirect after a short delay
         setTimeout(() => {
-          if (document.visibilityState === 'visible') {
+          if (document.visibilityState === 'visible') { // Only redirect if page is visible
             router.replace(chatIdParam ? `/chats/${chatIdParam}` : '/chats');
           }
         }, 300);
     } else {
+        // SDK initiated leave (e.g., meeting ended by host, kicked)
+        // Reset state for a new call
         setMeetingId('');
         setIsJoining(false);
         setInviteSent(false);
-        if (API_KEY_FROM_ENV) generateAuthTokenInternal();
+        if (API_KEY_FROM_ENV) generateAuthTokenInternal(); // Refresh token
     }
-  }, [isConnected, localStream, router, chatIdParam, API_KEY_FROM_ENV, generateAuthTokenInternal]);
+  }, [
+      isConnected, localStream, router, chatIdParam, isCaller, 
+      inviteSent, calleeIdParam, user, API_KEY_FROM_ENV, 
+      generateAuthTokenInternal, meetingId // Added meetingId
+  ]);
 
   useEffect(() => {
+    // Component unmount cleanup
     return () => {
       if (meetingRef.current && isConnected) {
         try { meetingRef.current.leave(); } catch(e) { console.warn("Error during meeting.leave() on unmount:", e); }
@@ -473,8 +521,17 @@ function VideoSDKCallPageContent() {
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
+      // If caller was inviting and unmounts, try to delete invite
+      if (isCaller && inviteSent && calleeIdParam) {
+        const inviteDocRef = doc(db, "videoCallInvites", calleeIdParam);
+        getDoc(inviteDocRef).then(inviteSnap => {
+          if (inviteSnap.exists() && inviteSnap.data()?.meetingId === meetingId) { // use current meetingId for check
+            deleteDoc(inviteDocRef).then(() => console.log("[VideoSDK] Invite deleted on unmount for callee:", calleeIdParam));
+          }
+        });
+      }
     };
-  }, [isConnected, localStream]);
+  }, [isConnected, localStream, isCaller, inviteSent, calleeIdParam, meetingId]); // Added meetingId
 
   const toggleCameraInternal = useCallback(async () => {
     const newCameraState = !isCameraOn;
@@ -483,7 +540,7 @@ function VideoSDKCallPageContent() {
       else meetingRef.current.disableWebcam();
     }
     setIsCameraOn(newCameraState);
-    if (!isConnected) await initializeLocalMediaInternal();
+    if (!isConnected) await initializeLocalMediaInternal(); // Re-init preview if not connected
   }, [isCameraOn, isConnected, initializeLocalMediaInternal]);
 
   const toggleMicrophoneInternal = useCallback(async () => {
@@ -493,72 +550,33 @@ function VideoSDKCallPageContent() {
       else meetingRef.current.muteMic();
     }
     setIsMicOn(newMicState);
-    if (!isConnected) await initializeLocalMediaInternal();
+    if (!isConnected) await initializeLocalMediaInternal(); // Re-init preview if not connected
   }, [isMicOn, isConnected, initializeLocalMediaInternal]);
 
-  useEffect(() => {
-    if (!API_KEY_FROM_ENV) {
-      setError("Video SDK API Key is not configured. Video calls are disabled.");
-      setCallStatus("Configuration Error");
-      setSdkLoaded(false);
-      return;
-    }
-
-    const scriptId = 'videosdk-script';
-    if (document.getElementById(scriptId) && window.VideoSDK) {
-      setSdkLoaded(true);
-      setCallStatus(prev => prev === "Initializing..." || prev === "SDK Loading..." ? "SDK Loaded" : prev);
-      return;
-    }
-    
-    setCallStatus("SDK Loading...");
-    const script = document.createElement('script');
-    script.id = scriptId;
-    script.src = 'https://sdk.videosdk.live/rtc-js-prebuilt/0.3.26/rtc-js-prebuilt.js';
-    script.async = true;
-    script.crossOrigin = 'anonymous';
-
-    const handleScriptLoad = () => {
+  const handleSdkScriptLoad = useCallback(() => {
+    console.log('Video SDK script.onload fired.');
+    // Check for window.VideoSDK with a delay to ensure it's fully initialized
+    setTimeout(() => {
       if (window.VideoSDK) {
+        console.log('window.VideoSDK is available.');
         setSdkLoaded(true);
-        setCallStatus(prev => prev === "SDK Loading..." ? "SDK Loaded" : prev);
+        setCallStatus(prev => prev === "SDK Loading..." || prev === "Initializing..." ? "SDK Loaded" : prev);
       } else {
-        setTimeout(() => {
-          if (window.VideoSDK) {
-            setSdkLoaded(true);
-            setCallStatus(prev => prev === "SDK Loading..." ? "SDK Loaded" : prev);
-          } else {
-            console.error('window.VideoSDK still not available after delay. SDK loading failed or is very slow.');
-            setError('Video SDK failed to initialize properly. Please try refreshing the page.');
-            setCallStatus("SDK Error");
-            setSdkLoaded(false);
-          }
-        }, 2000);
+        console.error('window.VideoSDK still not available after delay. SDK loading failed or is very slow.');
+        setError('Video SDK failed to initialize properly. Please try refreshing the page.');
+        setCallStatus("SDK Error");
+        setSdkLoaded(false);
       }
-    };
+    }, 1000); // Increased delay
+  }, []);
 
-    const handleScriptError = (event: Event | string) => {
-      console.error('Failed to load Video SDK script:', event);
-      setError('Failed to load Video SDK. Check network or ad-blocker, then refresh.');
-      setCallStatus("SDK Error");
-      setSdkLoaded(false);
-    };
+  const handleSdkScriptError = useCallback((e: Event | string) => {
+    console.error('Failed to load Video SDK script:', e);
+    setError('Failed to load Video SDK. Check network or ad-blocker, then refresh.');
+    setCallStatus("SDK Error");
+    setSdkLoaded(false);
+  }, []);
 
-    script.onload = handleScriptLoad;
-    script.onerror = handleScriptError;
-    document.head.appendChild(script);
-
-    return () => {
-      const existingScript = document.getElementById(scriptId);
-      if (existingScript && document.head.contains(existingScript)) {
-         // document.head.removeChild(existingScript); // Consider if script removal is desired
-      }
-    };
-  }, [API_KEY_FROM_ENV]);
-
-  const generateMeetingIdOnClick = () => {
-    setMeetingId(generateRandomMeetingId());
-  };
 
   if (authLoading) {
     return (
@@ -596,6 +614,13 @@ function VideoSDKCallPageContent() {
         <title>Video Call - VideoSDK</title>
         <meta name="description" content="Video calling application with VideoSDK.live" />
       </Head>
+      <Script 
+        src="https://sdk.videosdk.live/rtc-js-prebuilt/0.3.26/rtc-js-prebuilt.js"
+        strategy="afterInteractive"
+        onLoad={handleSdkScriptLoad}
+        onError={handleSdkScriptError}
+        crossOrigin="anonymous"
+      />
 
       <div className="min-h-screen bg-gray-900 text-white">
         {!isConnected ? (
@@ -643,7 +668,7 @@ function VideoSDKCallPageContent() {
                             disabled={!!meetingIdToJoinParam && !isCaller}
                             />
                             <Button
-                                onClick={generateMeetingIdOnClick}
+                                onClick={generateRandomMeetingId}
                                 variant="outline"
                                 className="bg-gray-600 hover:bg-gray-500 border-gray-500 text-gray-200"
                                 size="icon"
@@ -783,7 +808,7 @@ function VideoSDKCallPageContent() {
                   {isCameraOn ? <Camera className="h-5 w-5 md:h-6 md:w-6" /> : <CameraOff className="h-5 w-5 md:h-6 md:w-6" />}
                 </Button>
                 <Button
-                  onClick={() => handleLeaveMeetingInternal(false)}
+                  onClick={handleLeaveMeetingInternal}
                   variant="destructive"
                   size="lg"
                   className="rounded-full p-3 aspect-square"
@@ -812,5 +837,3 @@ export default function VideoSDKCallPage() {
     </Suspense>
   );
 }
-
-    
